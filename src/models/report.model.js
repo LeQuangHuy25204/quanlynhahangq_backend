@@ -12,19 +12,15 @@ const getRevenueByBranch = async (branchId, startDate, endDate) => {
   const [rows] = await pool.execute(
     `SELECT
        DATE(i.InvoiceDate) AS Date,
-       COUNT(DISTINCT p.PaymentID)  AS TotalInvoices,
+       COUNT(DISTINCT i.InvoiceID)  AS TotalInvoices,
        SUM(i.SubTotal)              AS SubTotal,
        SUM(i.VATAmount)             AS VATAmount,
        SUM(i.ServiceFeeAmount)      AS ServiceFeeAmount,
        SUM(i.DiscountAmount)        AS DiscountAmount,
        SUM(i.TotalAmount)           AS TotalRevenue
      FROM invoice i
-     INNER JOIN payment p  ON i.PaymentID  = p.PaymentID
-     INNER JOIN \`order\` o ON p.OrderID    = o.OrderID
-     INNER JOIN session s  ON o.SessionID  = s.SessionID
-     INNER JOIN \`table\` t ON s.TableID    = t.TableID
-     INNER JOIN area a     ON t.AreaID     = a.AreaID
-     WHERE a.BranchID  = ?
+     INNER JOIN payment p  ON i.InvoiceID  = p.InvoiceID
+     WHERE i.BranchID  = ?
        AND p.Status    = 1
        AND DATE(i.InvoiceDate) BETWEEN ? AND ?
      GROUP BY DATE(i.InvoiceDate)
@@ -44,7 +40,7 @@ const getTopSellingItems = async (branchId, startDate, endDate, limit = 10) => {
        mi.Name        AS MenuItemName,
        mi.Unit,
        SUM(ol.Quantity) AS TotalQuantity,
-       SUM(ol.Quantity * ol.UnitPrice) AS TotalRevenue
+       SUM(ol.LineTotal) AS TotalRevenue
      FROM orderline ol
      INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
      INNER JOIN \`order\` o  ON ol.OrderID   = o.OrderID
@@ -70,15 +66,11 @@ const getRevenueByRestaurant = async (restaurantId, startDate, endDate) => {
     `SELECT
        b.BranchID,
        b.Name AS BranchName,
-       COUNT(DISTINCT p.PaymentID)  AS TotalInvoices,
+       COUNT(DISTINCT i.InvoiceID)  AS TotalInvoices,
        SUM(i.TotalAmount)           AS TotalRevenue
      FROM invoice i
-     INNER JOIN payment p  ON i.PaymentID  = p.PaymentID
-     INNER JOIN \`order\` o ON p.OrderID    = o.OrderID
-     INNER JOIN session s  ON o.SessionID  = s.SessionID
-     INNER JOIN \`table\` t ON s.TableID    = t.TableID
-     INNER JOIN area a     ON t.AreaID     = a.AreaID
-     INNER JOIN branch b   ON a.BranchID   = b.BranchID
+     INNER JOIN payment p  ON i.InvoiceID  = p.InvoiceID
+     INNER JOIN branch b   ON i.BranchID   = b.BranchID
      WHERE b.RestaurantID = ?
        AND p.Status       = 1
        AND DATE(i.InvoiceDate) BETWEEN ? AND ?

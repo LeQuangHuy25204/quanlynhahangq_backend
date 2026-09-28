@@ -10,13 +10,13 @@ const { requireRole }  = require('../middlewares/roleMiddleware');
  * @route   POST /api/payments/checkout
  * @desc    Thu ngân tạo hóa đơn tạm tính (tính tiền)
  * @access  Protected (Cashier, BranchManager, RestaurantAdmin)
- * @body    { orderId: number }
+ * @body    { sessionId: number }
  */
 router.post(
   '/checkout',
   authenticate,
   requireRole('Cashier', 'BranchManager', 'RestaurantAdmin'),
-  paymentController.checkoutOrder
+  paymentController.checkoutSession
 );
 
 /**

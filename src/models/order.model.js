@@ -32,15 +32,13 @@ const createOrder = async ({ sessionId, participantId, status, createdByStaffId 
 const createOrderLines = async (orderId, lines) => {
   if (!lines || lines.length === 0) return [];
 
-  // Batch insert — 7 cột: OrderID, MenuItemID, Quantity, UnitPrice, Note, Status, DiscountApplied
-  // UnitPrice là giá ĐÃ SNAPSHOT từ service (BR-07) — model không tự tính lại
-  const placeholders = lines.map(() => '(?, ?, ?, ?, ?, ?, 0.00)').join(', ');
-  const values = lines.flatMap(({ menuItemId, quantity, unitPrice, note, status }) => [
-    orderId, menuItemId, quantity, unitPrice, note || null, status,
+  const placeholders = lines.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, 0.00)').join(', ');
+  const values = lines.flatMap(({ menuItemId, promotionId, quantity, unitPrice, note, status }) => [
+    orderId, menuItemId, promotionId || null, quantity, unitPrice, quantity * unitPrice, note || null, status,
   ]);
 
   await pool.execute(
-    `INSERT INTO orderline (OrderID, MenuItemID, Quantity, UnitPrice, Note, Status, DiscountApplied)
+    `INSERT INTO orderline (OrderID, MenuItemID, PromotionID, Quantity, UnitPrice, LineTotal, Note, Status, DiscountApplied)
      VALUES ${placeholders}`,
     values
   );
@@ -60,8 +58,8 @@ const findOrderWithLines = async (orderId) => {
       [orderId]
     ),
     pool.execute(
-      `SELECT ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName,
-              ol.Quantity, ol.UnitPrice, ol.Note, ol.Status, ol.DiscountApplied
+      `SELECT ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, ol.PromotionID,
+              ol.Quantity, ol.UnitPrice, ol.LineTotal, ol.Note, ol.Status, ol.DiscountApplied
        FROM orderline ol
        INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
        WHERE ol.OrderID = ?`,
@@ -78,7 +76,7 @@ const findOrderWithLines = async (orderId) => {
  */
 const findOrderLineById = async (orderLineId) => {
   const [rows] = await pool.execute(
-    `SELECT OrderLineID, OrderID, MenuItemID, Quantity, UnitPrice, Note, Status, DiscountApplied
+    `SELECT OrderLineID, OrderID, MenuItemID, PromotionID, Quantity, UnitPrice, LineTotal, Note, Status, DiscountApplied
      FROM orderline
      WHERE OrderLineID = ?`,
     [orderLineId]
@@ -142,6 +140,17 @@ const updateOrderStatus = async (orderId, status) => {
 };
 
 /**
+ * Cập nhật trạng thái của tất cả Order trong 1 Session.
+ */
+const updateAllOrdersStatusInSession = async (sessionId, status) => {
+  const [result] = await pool.execute(
+    `UPDATE \`order\` SET Status = ? WHERE SessionID = ?`,
+    [status, sessionId]
+  );
+  return result.affectedRows;
+};
+
+/**
  * Hủy một dòng món (ghi lý do và người hủy).
  */
 const cancelOrderLine = async (orderLineId, { cancelledBy, cancelReason }) => {
@@ -163,5 +172,6 @@ module.exports = {
   updateOrderLineQuantityAndStatus,
   findActiveOrderByParticipantId,
   updateOrderStatus,
+  updateAllOrdersStatusInSession,
   cancelOrderLine,
 };

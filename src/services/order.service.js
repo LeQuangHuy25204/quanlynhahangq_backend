@@ -251,7 +251,7 @@ const requestPayment = async (orderId, sessionToken) => {
     throw err;
   }
 
-  await orderModel.updateOrderStatus(orderId, ORDER_STATUS.WAITING_PAYMENT);
+  await orderModel.updateAllOrdersStatusInSession(order.SessionID, ORDER_STATUS.WAITING_PAYMENT);
 
   // [GIẢ LẬP] Bắn socket báo cho thu ngân
   console.log(`[CASHIER_NOTIFY] Bàn có SessionID ${order.SessionID} yêu cầu thanh toán OrderID ${orderId}`);

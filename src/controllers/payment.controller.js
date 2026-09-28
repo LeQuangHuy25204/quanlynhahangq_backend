@@ -4,15 +4,15 @@ const paymentService = require('../services/payment.service');
 
 /**
  * POST /api/payments/checkout
- * Body: { orderId: number }
+ * Body: { sessionId: number }
  */
-const checkoutOrder = async (req, res, next) => {
+const checkoutSession = async (req, res, next) => {
   try {
-    const { orderId, promotionId } = req.body;
-    if (!orderId) {
-      return res.status(400).json({ success: false, message: 'orderId là bắt buộc.' });
+    const { sessionId, promotionId } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ success: false, message: 'sessionId là bắt buộc.' });
     }
-    const data = await paymentService.checkoutOrder(orderId, req.user, promotionId || null);
+    const data = await paymentService.checkoutSession(sessionId, req.user, promotionId || null);
     res.status(201).json({ success: true, message: 'Tạo hóa đơn thành công.', data });
   } catch (err) {
     next(err);
@@ -34,4 +34,4 @@ const completePayment = async (req, res, next) => {
   }
 };
 
-module.exports = { checkoutOrder, completePayment };
+module.exports = { checkoutSession, completePayment };
