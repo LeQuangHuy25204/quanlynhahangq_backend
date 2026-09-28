@@ -163,6 +163,70 @@ const cancelOrderLine = async (orderLineId, { cancelledBy, cancelReason }) => {
   return result.affectedRows;
 };
 
+/**
+ * Tìm tất cả các order lines thuộc về 1 session (gộp tất cả orders của bàn)
+ */
+const findOrderLinesBySessionId = async (sessionId) => {
+  const [rows] = await pool.execute(
+    `SELECT ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, ol.Quantity, ol.UnitPrice, ol.LineTotal, ol.Note, ol.Status,
+            o.OrderID, o.Status AS OrderStatus, mi.IsWeightBased
+     FROM orderline ol
+     INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
+     INNER JOIN \`order\` o ON ol.OrderID = o.OrderID
+     WHERE o.SessionID = ?
+     ORDER BY o.CreatedAt DESC, ol.OrderLineID ASC`,
+    [sessionId]
+  );
+  return rows;
+};
+
+/**
+ * Lấy danh sách tất cả các order và order lines theo branchId cho OrderBoard của Waiter
+ */
+const findOrdersByBranch = async (branchId) => {
+  const [rows] = await pool.execute(
+    `SELECT 
+       o.OrderID, o.OrderNumber, o.CreatedAt AS OrderCreatedAt,
+       t.Name AS TableName,
+       ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, 
+       ol.Quantity, ol.Status, ol.Note, ol.CreatedAt AS LineCreatedAt
+     FROM \`order\` o
+     INNER JOIN session s ON o.SessionID = s.SessionID
+     INNER JOIN \`table\` t ON s.TableID = t.TableID
+     INNER JOIN area a ON t.AreaID = a.AreaID
+     INNER JOIN orderline ol ON o.OrderID = ol.OrderID
+     INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
+     WHERE a.BranchID = ? AND ol.Status != 3
+     ORDER BY ol.CreatedAt ASC`,
+    [branchId]
+  );
+
+  // Group by OrderID
+  const ordersMap = {};
+  rows.forEach(row => {
+    if (!ordersMap[row.OrderID]) {
+      ordersMap[row.OrderID] = {
+        OrderID: row.OrderID,
+        OrderNumber: row.OrderNumber,
+        TableName: row.TableName,
+        CreatedAt: row.OrderCreatedAt,
+        lines: []
+      };
+    }
+    ordersMap[row.OrderID].lines.push({
+      OrderLineID: row.OrderLineID,
+      MenuItemID: row.MenuItemID,
+      MenuItemName: row.MenuItemName,
+      Quantity: row.Quantity,
+      Status: row.Status,
+      Note: row.Note,
+      CreatedAt: row.LineCreatedAt
+    });
+  });
+
+  return Object.values(ordersMap);
+};
+
 module.exports = {
   createOrder,
   createOrderLines,
@@ -174,4 +238,6 @@ module.exports = {
   updateOrderStatus,
   updateAllOrdersStatusInSession,
   cancelOrderLine,
+  findOrderLinesBySessionId,
+  findOrdersByBranch,
 };

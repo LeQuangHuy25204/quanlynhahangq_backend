@@ -21,6 +21,25 @@ const { requireRole }  = require('../middlewares/roleMiddleware');
 router.post('/', orderController.placeOrder);
 
 /**
+ * @route   GET /api/orders
+ * @desc    Lấy tất cả các order và món ăn theo chi nhánh cho Waiter/Staff
+ * @access  Protected
+ */
+router.get(
+  '/',
+  authenticate,
+  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  orderController.getOrdersByBranch
+);
+
+/**
+ * @route   GET /api/orders/tracking/:sessionToken
+ * @desc    Khách hàng theo dõi đơn hàng của phiên
+ * @access  Public
+ */
+router.get('/tracking/:sessionToken', orderController.trackOrderByToken);
+
+/**
  * @route   PUT /api/orders/lines/:orderLineId/weight
  * @desc    Phục vụ cân món và chuyển sang bếp (FR-SRV-05)
  * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
@@ -65,6 +84,18 @@ router.patch(
   authenticate,
   requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
   orderController.cancelOrderLine
+);
+
+/**
+ * @route   GET /api/orders/session/:sessionId
+ * @desc    Lấy danh sách món ăn đã gọi của một phiên
+ * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ */
+router.get(
+  '/session/:sessionId',
+  authenticate,
+  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  orderController.getOrderLinesBySession
 );
 
 module.exports = router;

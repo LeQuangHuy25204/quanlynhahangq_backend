@@ -68,4 +68,28 @@ const cancelOrderLine = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, cancelOrderLine };
+const getOrderLinesBySession = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const data = await orderService.getOrderLinesBySession(sessionId);
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
+const getOrdersByBranch = async (req, res, next) => {
+  try {
+    const branchId = req.query.branchId || req.user.branchId;
+    const data = await orderService.getOrdersByBranch(branchId);
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
+const trackOrderByToken = async (req, res, next) => {
+  try {
+    const { sessionToken } = req.params;
+    const data = await orderService.trackOrderByToken(sessionToken);
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
+module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };

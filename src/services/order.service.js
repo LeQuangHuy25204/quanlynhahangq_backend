@@ -60,7 +60,7 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
   for (const item of items) {
     const { menuItemId, quantity, note } = item;
 
-    if (!menuItemId || !quantity || quantity <= 0) {
+    if (!menuItemId || quantity === undefined || quantity <= 0) {
       errors.push(`Dữ liệu không hợp lệ cho menuItemId ${menuItemId}.`);
       continue;
     }
@@ -77,11 +77,11 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
       continue;
     }
 
-    // Xác định trạng thái và số lượng theo loại món (Món cân = quantity 0)
+    // Xác định trạng thái theo loại món (Món cân = CHỜ CÂN)
     const isWeightBased = menuItem.IsWeightBased === 1;
-    const finalQuantity = isWeightBased ? 0 : quantity;
+    const finalQuantity = quantity; // Use customer's requested quantity
     const lineStatus = isWeightBased
-      ? ORDER_LINE_STATUS.WAITING_WEIGH   // Món cân — CHỜ CÂN
+      ? ORDER_LINE_STATUS.WAITING_WEIGH   // Món cân — CHỜ CÂN (Bếp sẽ cân lại và chốt số)
       : ORDER_LINE_STATUS.WAITING_CONFIRM; // Món thường — CHỜ XÁC NHẬN
 
     orderLinesData.push({
@@ -96,6 +96,14 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
   if (errors.length > 0 && orderLinesData.length === 0) {
     const err = new Error(`Không thể tạo đơn: ${errors.join('; ')}`);
     err.statusCode = 422;
+    throw err;
+  }
+
+  // ── Kiểm tra Order đang chờ thanh toán ──────────────────
+  const existingLines = await orderModel.findOrderLinesBySessionId(session.SessionID);
+  if (existingLines.some(line => line.OrderStatus === ORDER_STATUS.WAITING_PAYMENT)) {
+    const err = new Error('Bàn đã yêu cầu thanh toán, không thể gọi thêm món.');
+    err.statusCode = 409;
     throw err;
   }
 
@@ -294,4 +302,31 @@ const cancelOrderLine = async (orderLineId, cancelReason, actorUser) => {
   return { orderLineId, status: ORDER_LINE_STATUS.CANCELLED, message: 'Đã hủy món thành công.' };
 };
 
-module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, cancelOrderLine };
+const getOrderLinesBySession = async (sessionId) => {
+  return await orderModel.findOrderLinesBySessionId(sessionId);
+};
+
+const getOrdersByBranch = async (branchId) => {
+  return await orderModel.findOrdersByBranch(branchId);
+};
+
+const trackOrderByToken = async (sessionToken) => {
+  const session = await sessionModel.findSessionByToken(sessionToken);
+  if (!session) {
+    const err = new Error('Phiên không hợp lệ'); err.statusCode = 404; throw err;
+  }
+  const lines = await orderModel.findOrderLinesBySessionId(session.SessionID);
+  
+  // Extract the OrderID and Status from the first line
+  const orderId = lines.length > 0 ? lines[0].OrderID : null;
+  const status = lines.length > 0 ? lines[0].OrderStatus : 0;
+  
+  return {
+    OrderID: orderId, 
+    OrderNumber: sessionToken.slice(0, 8).toUpperCase(),
+    Status: status,
+    lines
+  };
+};
+
+module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };

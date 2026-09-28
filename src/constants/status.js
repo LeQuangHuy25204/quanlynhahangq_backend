@@ -27,6 +27,8 @@ const ORDER_LINE_STATUS = Object.freeze({
   CONFIRMED:       2, // ĐÃ XÁC NHẬN
   CANCELLED:       3, // ĐÃ HỦY
   COOKING:         4, // ĐANG CHẾ BIẾN (Chuyển bếp sau khi cân)
+  READY:           5, // SẴN SÀNG PHỤC VỤ (Nấu xong)
+  SERVED:          6, // ĐÃ PHỤC VỤ
 });
 
 // Payment.Status

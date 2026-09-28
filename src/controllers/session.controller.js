@@ -43,4 +43,30 @@ const updateSessionStatus = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { qrScan, joinSession, updateSessionStatus };
+/**
+ * POST /api/sessions/open
+ * Body: { tableId, guestCount, note }
+ */
+const manualOpenSession = async (req, res, next) => {
+  try {
+    const { tableId, guestCount } = req.body;
+    const data = await sessionService.manualOpenSession(tableId, guestCount, req.user);
+    res.status(201).json({ success: true, message: 'Mở bàn thành công.', data });
+  } catch (err) { next(err); }
+};
+
+/**
+ * GET /api/sessions/:sessionId
+ */
+const getSessionById = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await sessionService.getSessionById(sessionId);
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Phiên không tồn tại.' });
+    }
+    res.status(200).json({ success: true, data: session });
+  } catch (err) { next(err); }
+};
+
+module.exports = { qrScan, joinSession, updateSessionStatus, manualOpenSession, getSessionById };

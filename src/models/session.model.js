@@ -34,6 +34,7 @@ const findActiveSessionByTableId = async (tableId) => {
        SessionToken,
        JoinCode,
        Status,
+       GuestCount,
        StartTime
      FROM session
      WHERE TableID = ?
@@ -47,13 +48,13 @@ const findActiveSessionByTableId = async (tableId) => {
 
 /**
  * Tạo session mới.
- * @param {object} data - { tableId, sessionToken, joinCode, status }
+ * @param {object} data - { tableId, sessionToken, joinCode, status, guestCount }
  */
-const createSession = async ({ tableId, sessionToken, joinCode, status }) => {
+const createSession = async ({ tableId, sessionToken, joinCode, status, guestCount = 2 }) => {
   const [result] = await pool.execute(
-    `INSERT INTO session (TableID, SessionToken, JoinCode, Status)
-     VALUES (?, ?, ?, ?)`,
-    [tableId, sessionToken, joinCode, status]
+    `INSERT INTO session (TableID, SessionToken, JoinCode, Status, GuestCount)
+     VALUES (?, ?, ?, ?, ?)`,
+    [tableId, sessionToken, joinCode, status, guestCount]
   );
   return result.insertId;
 };

@@ -51,16 +51,49 @@ const findTablesByArea = async (areaId) => {
 
 const findTablesByBranch = async (branchId) => {
   const [rows] = await pool.execute(
-    `SELECT t.TableID, t.Name, t.QRCode, t.IsActive,
-            a.AreaID, a.Name AS AreaName
+    `SELECT
+       t.TableID, t.Name, t.QRCode, t.IsActive,
+       a.AreaID, a.Name AS AreaName,
+       -- Active session info (Status 0 = chờ xác nhận, 1 = đang phục vụ)
+       s.SessionID,
+       s.Status      AS SessionStatus,
+       s.GuestCount  AS SessionGuestCount,
+       s.StartTime   AS SessionStartTime,
+       -- Order total amount
+       COALESCE(SUM(ol.LineTotal - ol.DiscountApplied), 0) AS SessionTotalAmount,
+       -- Order status
+       MAX(o.Status) AS OrderStatus
      FROM \`table\` t
      INNER JOIN area a ON t.AreaID = a.AreaID
+     LEFT JOIN session s ON s.TableID = t.TableID AND s.Status IN (0, 1)
+     LEFT JOIN \`order\` o ON o.SessionID = s.SessionID
+     LEFT JOIN orderline ol ON ol.OrderID = o.OrderID AND ol.Status NOT IN (3)
      WHERE a.BranchID = ?
+     GROUP BY t.TableID, t.Name, t.QRCode, t.IsActive, a.AreaID, a.Name,
+              s.SessionID, s.Status, s.GuestCount, s.StartTime
      ORDER BY a.Name, t.Name`,
     [branchId]
   );
-  return rows;
+
+  // Reshape to { TableID, Name, AreaName, Session: {...} | null }
+  return rows.map(r => ({
+    TableID:  r.TableID,
+    Name:     r.Name,
+    QRCode:   r.QRCode,
+    IsActive: r.IsActive,
+    AreaID:   r.AreaID,
+    AreaName: r.AreaName,
+    Session:  r.SessionID ? {
+      SessionID:   r.SessionID,
+      Status:      r.SessionStatus,
+      GuestCount:  r.SessionGuestCount,
+      StartTime:   r.SessionStartTime,
+      TotalAmount: parseFloat(r.SessionTotalAmount) || 0,
+      Order:       r.OrderStatus !== null ? { Status: r.OrderStatus } : null,
+    } : null,
+  }));
 };
+
 
 const findTableById = async (tableId) => {
   const [rows] = await pool.execute(

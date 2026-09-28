@@ -36,4 +36,24 @@ router.put(
   sessionController.updateSessionStatus
 );
 
+/**
+ * @route   POST /api/sessions/open
+ * @desc    Nhân viên mở bàn thủ công
+ * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ * @body    { tableId: number, guestCount: number, note: string }
+ */
+router.post(
+  '/open',
+  authenticate,
+  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  sessionController.manualOpenSession
+);
+
+/**
+ * @route   GET /api/sessions/:sessionId
+ * @desc    Lấy thông tin phiên theo ID (khách poll trạng thái)
+ * @access  Public (khách chờ mở bàn cần poll)
+ */
+router.get('/:sessionId', sessionController.getSessionById);
+
 module.exports = router;
