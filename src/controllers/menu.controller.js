@@ -40,4 +40,32 @@ const setBranchOverride = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getMenu, addMenuItem, setBranchOverride };
+const getAdminMenu = async (req, res, next) => {
+  try {
+    const data = await menuService.getAdminMenu(req.query.branchId, req.user);
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
+const getCategories = async (req, res, next) => {
+  try {
+    const data = await menuService.getCategories(req.user);
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
+const createCategory = async (req, res, next) => {
+  try {
+    const data = await menuService.createCategory(req.body, req.user);
+    res.status(201).json({ success: true, message: 'Thêm danh mục thành công.', data });
+  } catch (err) { next(err); }
+};
+
+const updateMenuItem = async (req, res, next) => {
+  try {
+    const data = await menuService.updateMenuItem(req.params.menuItemId, req.body, req.user);
+    res.status(200).json({ success: true, message: 'Cập nhật món ăn thành công.', data });
+  } catch (err) { next(err); }
+};
+
+module.exports = { getMenu, addMenuItem, setBranchOverride, getAdminMenu, getCategories, createCategory, updateMenuItem };

@@ -56,9 +56,16 @@ const requestPayment = async (req, res, next) => {
 };
 
 /**
- * PATCH /api/orders/lines/:orderLineId/cancel
- * Body: { cancelReason?: string }
+ * POST /api/orders/:orderId/staff-request-payment
  */
+const staffRequestPayment = async (req, res, next) => {
+  try {
+    const { orderId } = req.params;
+    const data = await orderService.staffRequestPayment(orderId, req.user);
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};
+
 const cancelOrderLine = async (req, res, next) => {
   try {
     const { orderLineId } = req.params;
@@ -79,7 +86,8 @@ const getOrderLinesBySession = async (req, res, next) => {
 const getOrdersByBranch = async (req, res, next) => {
   try {
     const branchId = req.query.branchId || req.user.branchId;
-    const data = await orderService.getOrdersByBranch(branchId);
+    const status = req.query.status !== undefined ? req.query.status : null;
+    const data = await orderService.getOrdersByBranch(branchId, status);
     res.status(200).json({ success: true, data });
   } catch (err) { next(err); }
 };
@@ -92,4 +100,4 @@ const trackOrderByToken = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
+module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };

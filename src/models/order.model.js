@@ -107,9 +107,9 @@ const verifyOrderLineBelongsToBranch = async (orderLineId, branchId) => {
 const updateOrderLineQuantityAndStatus = async (orderLineId, quantity, status) => {
   const [result] = await pool.execute(
     `UPDATE orderline
-     SET Quantity = ?, Status = ?
+     SET Quantity = ?, LineTotal = ROUND(? * UnitPrice, 2), Status = ?
      WHERE OrderLineID = ?`,
-    [quantity, status, orderLineId]
+    [quantity, quantity, status, orderLineId]
   );
   return result.affectedRows;
 };
@@ -181,25 +181,30 @@ const findOrderLinesBySessionId = async (sessionId) => {
 };
 
 /**
- * Lấy danh sách tất cả các order và order lines theo branchId cho OrderBoard của Waiter
+ * Lấy danh sách tất cả các order và order lines theo branchId cho OrderBoard của Waiter và CashierBoard
  */
-const findOrdersByBranch = async (branchId) => {
-  const [rows] = await pool.execute(
-    `SELECT 
-       o.OrderID, o.OrderNumber, o.CreatedAt AS OrderCreatedAt,
-       t.Name AS TableName,
+const findOrdersByBranch = async (branchId, status = null) => {
+  let query = `SELECT 
+       o.OrderID, o.OrderNumber, o.Status AS OrderStatus, o.SessionID, o.CreatedAt AS OrderCreatedAt,
+       t.Name AS TableName, a.Name AS AreaName,
        ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, 
-       ol.Quantity, ol.Status, ol.Note, ol.CreatedAt AS LineCreatedAt
+       ol.Quantity, ol.UnitPrice, ol.Status, ol.Note, ol.CreatedAt AS LineCreatedAt
      FROM \`order\` o
      INNER JOIN session s ON o.SessionID = s.SessionID
      INNER JOIN \`table\` t ON s.TableID = t.TableID
      INNER JOIN area a ON t.AreaID = a.AreaID
      INNER JOIN orderline ol ON o.OrderID = ol.OrderID
      INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
-     WHERE a.BranchID = ? AND ol.Status != 3
-     ORDER BY ol.CreatedAt ASC`,
-    [branchId]
-  );
+     WHERE a.BranchID = ? AND ol.Status != 3 AND s.Status != 2`; // Avoid closed sessions
+
+  const params = [branchId];
+  if (status !== null && status !== undefined) {
+    query += ` AND o.Status = ?`;
+    params.push(parseInt(status, 10));
+  }
+  query += ` ORDER BY ol.CreatedAt ASC`;
+
+  const [rows] = await pool.execute(query, params);
 
   // Group by OrderID
   const ordersMap = {};
@@ -207,8 +212,11 @@ const findOrdersByBranch = async (branchId) => {
     if (!ordersMap[row.OrderID]) {
       ordersMap[row.OrderID] = {
         OrderID: row.OrderID,
+        SessionID: row.SessionID,
         OrderNumber: row.OrderNumber,
+        OrderStatus: row.OrderStatus,
         TableName: row.TableName,
+        AreaName: row.AreaName,
         CreatedAt: row.OrderCreatedAt,
         lines: []
       };
@@ -218,6 +226,7 @@ const findOrdersByBranch = async (branchId) => {
       MenuItemID: row.MenuItemID,
       MenuItemName: row.MenuItemName,
       Quantity: row.Quantity,
+      UnitPrice: row.UnitPrice,
       Status: row.Status,
       Note: row.Note,
       CreatedAt: row.LineCreatedAt

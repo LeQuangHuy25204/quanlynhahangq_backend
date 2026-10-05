@@ -15,6 +15,7 @@ const paymentRoutes  = require('./routes/payment.routes');
 const tableRoutes    = require('./routes/table.routes');
 const promotionRoutes = require('./routes/promotion.routes');
 const reportRoutes   = require('./routes/report.routes');
+const branchRoutes   = require('./routes/branch.routes');
 const app = express();
 
 // ── Global Middlewares ────────────────────────────────────────
@@ -41,6 +42,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/tables',   tableRoutes);
 app.use('/api/promotions', promotionRoutes);
 app.use('/api/reports',  reportRoutes);
+app.use('/api/branches', branchRoutes);
 
 // ── 404 Handler ───────────────────────────────────────────────
 app.use((req, res) => {

@@ -28,7 +28,7 @@ router.post('/', orderController.placeOrder);
 router.get(
   '/',
   authenticate,
-  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
   orderController.getOrdersByBranch
 );
 
@@ -74,6 +74,13 @@ router.put(
 router.post('/:orderId/request-payment', orderController.requestPayment);
 
 /**
+ * @route   POST /api/orders/:orderId/staff-request-payment
+ * @desc    Nhân viên yêu cầu thanh toán (không cần sessionToken của khách)
+ * @access  Protected
+ */
+router.post('/:orderId/staff-request-payment', authenticate, requireRole('Waiter', 'BranchManager', 'RestaurantAdmin', 'Cashier'), orderController.staffRequestPayment);
+
+/**
  * @route   PATCH /api/orders/lines/:orderLineId/cancel
  * @desc    Phục vụ hủy món ăn
  * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
@@ -94,7 +101,7 @@ router.patch(
 router.get(
   '/session/:sessionId',
   authenticate,
-  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
   orderController.getOrderLinesBySession
 );
 

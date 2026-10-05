@@ -15,6 +15,28 @@ const { requireRole }    = require('../middlewares/roleMiddleware');
 router.get('/', menuController.getMenu);
 
 /**
+ * @route   GET /api/menu/admin?branchId=X
+ * @desc    Danh sách món cho màn quản trị (gồm món ngừng bán, giá gốc + giá đè chi nhánh)
+ * @access  BranchManager, RestaurantAdmin
+ */
+router.get('/admin', authenticate, requireRole('BranchManager', 'RestaurantAdmin'), menuController.getAdminMenu);
+
+/**
+ * @route   GET/POST /api/menu/categories
+ * @desc    Danh mục món cấp nhà hàng
+ * @access  BranchManager+RestaurantAdmin (xem), RestaurantAdmin (thêm)
+ */
+router.get('/categories', authenticate, requireRole('BranchManager', 'RestaurantAdmin'), menuController.getCategories);
+router.post('/categories', authenticate, requireRole('RestaurantAdmin'), menuController.createCategory);
+
+/**
+ * @route   PUT /api/menu/items/:menuItemId
+ * @desc    Sửa món gốc (tên, giá gốc, danh mục, ngừng bán...)
+ * @access  RestaurantAdmin
+ */
+router.put('/items/:menuItemId', authenticate, requireRole('RestaurantAdmin'), menuController.updateMenuItem);
+
+/**
  * @route   POST /api/menu/items
  * @desc    Thêm món ăn gốc ở cấp nhà hàng
  * @access  RestaurantAdmin

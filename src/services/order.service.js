@@ -267,6 +267,21 @@ const requestPayment = async (orderId, sessionToken) => {
   return { orderId, status: ORDER_STATUS.WAITING_PAYMENT, message: 'Đã gửi yêu cầu thanh toán tới Thu ngân.' };
 };
 
+const staffRequestPayment = async (orderId, actorUser) => {
+  const order = await orderModel.findOrderWithLines(orderId);
+  if (!order) {
+    const err = new Error('Không tìm thấy Order.'); err.statusCode = 404; throw err;
+  }
+  if (order.Status === ORDER_STATUS.WAITING_PAYMENT) {
+    return { orderId, message: 'Đã gửi yêu cầu thanh toán trước đó.' };
+  }
+  if (order.Status === ORDER_STATUS.CANCELLED) {
+    const err = new Error('Đơn hàng này đã bị hủy.'); err.statusCode = 409; throw err;
+  }
+  await orderModel.updateAllOrdersStatusInSession(order.SessionID, ORDER_STATUS.WAITING_PAYMENT);
+  return { orderId, status: ORDER_STATUS.WAITING_PAYMENT, message: 'Đã báo thu ngân bàn cần thanh toán.' };
+};
+
 /**
  * Phục vụ hủy món (FR-SRV-06).
  * - Không được hủy món đang COOKING (4) hoặc đã CANCELLED (3).
@@ -306,8 +321,8 @@ const getOrderLinesBySession = async (sessionId) => {
   return await orderModel.findOrderLinesBySessionId(sessionId);
 };
 
-const getOrdersByBranch = async (branchId) => {
-  return await orderModel.findOrdersByBranch(branchId);
+const getOrdersByBranch = async (branchId, status = null) => {
+  return await orderModel.findOrdersByBranch(branchId, status);
 };
 
 const trackOrderByToken = async (sessionToken) => {
@@ -325,8 +340,9 @@ const trackOrderByToken = async (sessionToken) => {
     OrderID: orderId, 
     OrderNumber: sessionToken.slice(0, 8).toUpperCase(),
     Status: status,
+    SessionStatus: session.Status,
     lines
   };
 };
 
-module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
+module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };

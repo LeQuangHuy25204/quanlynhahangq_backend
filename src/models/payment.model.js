@@ -67,10 +67,10 @@ const createInvoiceLines = async (invoiceId, lines) => {
 /**
  * Cập nhật trạng thái Payment khi đã thu tiền thành công.
  */
-const completePayment = async (paymentId, status, transactionNo = null) => {
+const completePayment = async (paymentId, status, transactionNo = null, paymentMethod = 'CASH') => {
   const [result] = await pool.execute(
-    `UPDATE payment SET Status = ?, PaidAt = NOW(), TransactionNo = ? WHERE PaymentID = ?`,
-    [status, transactionNo, paymentId]
+    `UPDATE payment SET Status = ?, PaidAt = NOW(), TransactionNo = ?, PaymentMethod = ? WHERE PaymentID = ?`,
+    [status, transactionNo, paymentMethod, paymentId]
   );
   return result.affectedRows;
 };
@@ -85,8 +85,59 @@ const findValidOrderLinesBySessionId = async (sessionId) => {
      FROM orderline ol
      INNER JOIN \`order\` o ON ol.OrderID = o.OrderID
      INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
-     WHERE o.SessionID = ? AND ol.Status != 3 AND o.Status != 3`,
+     WHERE o.SessionID = ? AND ol.Status != 3 AND o.Status != 2`,
     [sessionId]
+  );
+  return rows;
+};
+
+/**
+ * Tìm hóa đơn đã tạo cho một Session (mỗi Session chỉ có 1 hóa đơn — UQ_Invoice_SessionID).
+ */
+const findInvoiceBySessionId = async (sessionId) => {
+  const [rows] = await pool.execute(
+    `SELECT i.InvoiceID, i.InvoiceNumber, p.PaymentID, p.Status AS PaymentStatus
+     FROM invoice i
+     LEFT JOIN payment p ON p.InvoiceID = i.InvoiceID
+     WHERE i.SessionID = ?
+     LIMIT 1`,
+    [sessionId]
+  );
+  return rows[0] || null;
+};
+
+/**
+ * Chi tiết hóa đơn theo PaymentID (kèm chi nhánh, bàn, khu vực) — dùng để in hóa đơn.
+ */
+const findInvoiceDetailByPaymentId = async (paymentId) => {
+  const [rows] = await pool.execute(
+    `SELECT p.PaymentID, p.PaymentMethod, p.Status AS PaymentStatus, p.PaidAt, p.TransactionNo,
+            i.InvoiceID, i.InvoiceNumber, i.InvoiceDate, i.SessionID, i.BranchID,
+            i.SubTotal, i.VATAmount, i.ServiceFeeAmount, i.DiscountAmount, i.TotalAmount,
+            b.Name AS BranchName, b.Address AS BranchAddress, b.Phone AS BranchPhone,
+            b.VATRate, b.ServiceFeeRate,
+            t.Name AS TableName, a.Name AS AreaName,
+            pr.Name AS PromotionName
+     FROM payment p
+     INNER JOIN invoice i ON p.InvoiceID = i.InvoiceID
+     INNER JOIN branch b  ON i.BranchID  = b.BranchID
+     INNER JOIN session s ON i.SessionID = s.SessionID
+     INNER JOIN \`table\` t ON s.TableID = t.TableID
+     INNER JOIN area a    ON t.AreaID    = a.AreaID
+     LEFT JOIN promotion pr ON i.PromotionID = pr.PromotionID
+     WHERE p.PaymentID = ?`,
+    [paymentId]
+  );
+  return rows[0] || null;
+};
+
+const findInvoiceLines = async (invoiceId) => {
+  const [rows] = await pool.execute(
+    `SELECT InvoiceLineID, OrderLineID, ItemNameSnapshot AS MenuItemName, Quantity, UnitPrice, Amount
+     FROM invoiceline
+     WHERE InvoiceID = ?
+     ORDER BY InvoiceLineID ASC`,
+    [invoiceId]
   );
   return rows;
 };
@@ -111,6 +162,9 @@ module.exports = {
   createInvoice,
   createInvoiceLines,
   findValidOrderLinesBySessionId,
+  findInvoiceBySessionId,
+  findInvoiceDetailByPaymentId,
+  findInvoiceLines,
   completePayment,
   findPaymentWithInvoice
 };

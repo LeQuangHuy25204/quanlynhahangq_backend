@@ -121,4 +121,91 @@ const setBranchOverride = async (menuItemId, data, actorUser) => {
   return { menuItemId: parseInt(menuItemId, 10), branchId: targetBranchId };
 };
 
-module.exports = { getMenu, addMenuItem, setBranchOverride };
+/**
+ * Danh sách món cho màn quản trị (gồm món ngừng bán / bị chi nhánh ẩn).
+ * BranchManager luôn xem chi nhánh của mình; RestaurantAdmin chỉ định qua query branchId.
+ */
+const getAdminMenu = async (branchId, actorUser) => {
+  const { ROLE_CODE } = require('../constants/status');
+  const target = actorUser.roleCode === ROLE_CODE.RESTAURANT_ADMIN
+    ? parseInt(branchId, 10) || actorUser.branchId
+    : actorUser.branchId;
+  if (!target) {
+    const err = new Error('Không xác định được chi nhánh.'); err.statusCode = 400; throw err;
+  }
+  const rows = await menuModel.findAllMenuItemsForAdmin(actorUser.restaurantId, target);
+  return {
+    branchId: target,
+    items: rows.map((r) => ({
+      menuItemId:      r.MenuItemID,
+      categoryId:      r.CategoryID,
+      categoryName:    r.CategoryName,
+      name:            r.Name,
+      description:     r.Description,
+      imageUrl:        r.url_Image,
+      unit:            r.Unit,
+      basePrice:       parseFloat(r.BasePrice),
+      overridePrice:   r.OverridePrice != null ? parseFloat(r.OverridePrice) : null,
+      isWeightBased:   r.IsWeightBased === 1,
+      isActive:        r.IsActive === 1,
+      branchAvailable: r.BranchAvailable === 1,
+    })),
+  };
+};
+
+const getCategories = async (actorUser) => {
+  const rows = await menuModel.findCategories(actorUser.restaurantId);
+  return rows.map((r) => ({
+    categoryId:  r.CategoryID,
+    name:        r.Name,
+    description: r.Description,
+    itemCount:   Number(r.ItemCount),
+  }));
+};
+
+const createCategory = async ({ name, description }, actorUser) => {
+  if (!name || !String(name).trim()) {
+    const err = new Error('Tên danh mục là bắt buộc.'); err.statusCode = 400; throw err;
+  }
+  const categoryId = await menuModel.createCategory({
+    restaurantId: actorUser.restaurantId,
+    name: String(name).trim(),
+    description,
+  });
+  return { categoryId, name: String(name).trim() };
+};
+
+const updateMenuItem = async (menuItemId, data, actorUser) => {
+  const item = await menuModel.findMenuItemById(menuItemId);
+  if (!item || item.RestaurantID !== actorUser.restaurantId) {
+    const err = new Error('Không tìm thấy món ăn.'); err.statusCode = 404; throw err;
+  }
+  const basePrice = data.basePrice != null ? parseFloat(data.basePrice) : parseFloat(item.BasePrice);
+  if (isNaN(basePrice) || basePrice < 0) {
+    const err = new Error('BasePrice không hợp lệ.'); err.statusCode = 400; throw err;
+  }
+  let categoryId = item.CategoryID;
+  if (data.categoryId != null && Number(data.categoryId) !== item.CategoryID) {
+    const cat = await menuModel.findCategoryById(data.categoryId);
+    if (!cat || cat.RestaurantID !== actorUser.restaurantId) {
+      const err = new Error('Danh mục không hợp lệ.'); err.statusCode = 400; throw err;
+    }
+    categoryId = cat.CategoryID;
+  }
+  const name = data.name != null ? String(data.name).trim() : item.Name;
+  if (!name) {
+    const err = new Error('Tên món không được trống.'); err.statusCode = 400; throw err;
+  }
+  await menuModel.updateMenuItem(menuItemId, {
+    categoryId,
+    name,
+    description:   data.description !== undefined ? data.description : item.Description,
+    basePrice,
+    urlImage:      data.urlImage !== undefined ? data.urlImage : item.url_Image,
+    isWeightBased: data.isWeightBased !== undefined ? !!data.isWeightBased : item.IsWeightBased === 1,
+    isActive:      data.isActive !== undefined ? !!data.isActive : item.IsActive === 1,
+  });
+  return { menuItemId: parseInt(menuItemId, 10) };
+};
+
+module.exports = { getMenu, addMenuItem, setBranchOverride, getAdminMenu, getCategories, createCategory, updateMenuItem };

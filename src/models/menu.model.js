@@ -119,4 +119,85 @@ const getCurrentPriceForBranch = async (menuItemId, branchId, restaurantId) => {
   return rows[0] || null;
 };
 
-module.exports = { findAllMenuItems, createMenuItem, upsertBranchOverride, getCurrentPriceForBranch };
+/**
+ * Danh sách món cho màn quản trị: gồm cả món ngừng bán (IsActive = 0) và món bị
+ * chi nhánh ẩn, kèm giá gốc / giá đè của chi nhánh đang chọn.
+ */
+const findAllMenuItemsForAdmin = async (restaurantId, branchId) => {
+  const [rows] = await pool.execute(
+    `SELECT
+       mi.MenuItemID, mi.CategoryID, c.Name AS CategoryName,
+       mi.Name, mi.Description, mi.url_Image, mi.Unit,
+       mi.BasePrice, mi.IsWeightBased, mi.IsActive,
+       bmo.OverridePrice,
+       CASE WHEN bmo.BranchMenuOverrideID IS NULL THEN 1 ELSE bmo.IsAvailable END AS BranchAvailable
+     FROM menuitem mi
+     INNER JOIN category c ON mi.CategoryID = c.CategoryID
+     LEFT JOIN branchmenuoverride bmo
+            ON bmo.MenuItemID = mi.MenuItemID AND bmo.BranchID = ?
+     WHERE mi.RestaurantID = ?
+     ORDER BY c.Name ASC, mi.Name ASC`,
+    [branchId, restaurantId]
+  );
+  return rows;
+};
+
+const findCategories = async (restaurantId) => {
+  const [rows] = await pool.execute(
+    `SELECT c.CategoryID, c.Name, c.Description,
+            (SELECT COUNT(*) FROM menuitem mi WHERE mi.CategoryID = c.CategoryID) AS ItemCount
+     FROM category c
+     WHERE c.RestaurantID = ?
+     ORDER BY c.Name ASC`,
+    [restaurantId]
+  );
+  return rows;
+};
+
+const findCategoryById = async (categoryId) => {
+  const [rows] = await pool.execute(
+    `SELECT CategoryID, RestaurantID, Name FROM category WHERE CategoryID = ?`,
+    [categoryId]
+  );
+  return rows[0] || null;
+};
+
+const createCategory = async ({ restaurantId, name, description }) => {
+  const [result] = await pool.execute(
+    `INSERT INTO category (RestaurantID, Name, Description) VALUES (?, ?, ?)`,
+    [restaurantId, name, description || null]
+  );
+  return result.insertId;
+};
+
+const findMenuItemById = async (menuItemId) => {
+  const [rows] = await pool.execute(
+    `SELECT MenuItemID, RestaurantID, CategoryID, Name, Description, BasePrice, url_Image, IsWeightBased, IsActive
+     FROM menuitem WHERE MenuItemID = ?`,
+    [menuItemId]
+  );
+  return rows[0] || null;
+};
+
+const updateMenuItem = async (menuItemId, { categoryId, name, description, basePrice, urlImage, isWeightBased, isActive }) => {
+  const [result] = await pool.execute(
+    `UPDATE menuitem
+     SET CategoryID = ?, Name = ?, Description = ?, BasePrice = ?, url_Image = ?, IsWeightBased = ?, IsActive = ?
+     WHERE MenuItemID = ?`,
+    [categoryId, name, description || null, basePrice, urlImage || null, isWeightBased ? 1 : 0, isActive ? 1 : 0, menuItemId]
+  );
+  return result.affectedRows;
+};
+
+module.exports = {
+  findAllMenuItems,
+  createMenuItem,
+  upsertBranchOverride,
+  getCurrentPriceForBranch,
+  findAllMenuItemsForAdmin,
+  findCategories,
+  findCategoryById,
+  createCategory,
+  findMenuItemById,
+  updateMenuItem,
+};
