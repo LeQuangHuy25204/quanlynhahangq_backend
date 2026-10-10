@@ -24,4 +24,13 @@ const getRestaurantRevenue = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getBranchRevenue, getRestaurantRevenue };
+const getDashboardSummary = async (req, res, next) => {
+  try {
+    const { branchId, startDate, endDate } = req.query;
+    const data = await reportService.getDashboardSummary({ branchId, startDate, endDate }, req.user);
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
+module.exports = { getBranchRevenue, getRestaurantRevenue, getDashboardSummary };
+

@@ -27,13 +27,9 @@ const getBranchRevenue = async ({ branchId, startDate, endDate }, actorUser) => 
     // BranchManager / Cashier chỉ xem chi nhánh mình
     targetBranch = actorUser.branchId;
   } else {
-    // RestaurantAdmin cần truyền branchId hợp lệ
+    // RestaurantAdmin: nếu không truyền branchId thì mặc định chi nhánh 1
     if (!targetBranch || isNaN(targetBranch)) {
-      const err = new Error('branchId là bắt buộc.'); err.statusCode = 400; throw err;
-    }
-    const branch = await staffModel.verifyBranchBelongsToRestaurant(targetBranch, actorUser.restaurantId);
-    if (!branch) {
-      const err = new Error('Chi nhánh không tồn tại.'); err.statusCode = 403; throw err;
+      targetBranch = actorUser.branchId || 1;
     }
   }
 
@@ -55,4 +51,13 @@ const getRestaurantRevenue = async ({ startDate, endDate }, actorUser) => {
   return { restaurantId: actorUser.restaurantId, startDate, endDate, totalRevenue, branches };
 };
 
-module.exports = { getBranchRevenue, getRestaurantRevenue };
+const getDashboardSummary = async ({ branchId, startDate, endDate }, actorUser) => {
+  const targetBranch = actorUser.roleCode === ROLE_CODE.RESTAURANT_ADMIN
+    ? (branchId ? parseInt(branchId, 10) : null)
+    : actorUser.branchId;
+
+  return await reportModel.getDashboardSummary(actorUser.restaurantId, targetBranch, startDate, endDate);
+};
+
+module.exports = { getBranchRevenue, getRestaurantRevenue, getDashboardSummary };
+

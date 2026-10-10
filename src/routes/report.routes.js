@@ -32,4 +32,12 @@ router.get(
   reportController.getRestaurantRevenue
 );
 
+router.get(
+  '/dashboard-summary',
+  authenticate,
+  requireRole('BranchManager', 'RestaurantAdmin'),
+  reportController.getDashboardSummary
+);
+
 module.exports = router;
+

@@ -81,4 +81,28 @@ const getRevenueByRestaurant = async (restaurantId, startDate, endDate) => {
   return rows;
 };
 
-module.exports = { getRevenueByBranch, getTopSellingItems, getRevenueByRestaurant };
+const getDashboardSummary = async (restaurantId, branchId, startDate, endDate) => {
+  let sql = `SELECT
+       COALESCE(COUNT(DISTINCT i.InvoiceID), 0) AS totalInvoices,
+       COALESCE(SUM(i.TotalAmount), 0)          AS totalRevenue
+     FROM invoice i
+     INNER JOIN payment p ON i.InvoiceID = p.InvoiceID
+     INNER JOIN branch b  ON i.BranchID  = b.BranchID
+     WHERE b.RestaurantID = ? AND p.Status = 1`;
+  const params = [restaurantId];
+  if (branchId) {
+    sql += ' AND i.BranchID = ?';
+    params.push(branchId);
+  }
+  if (startDate && endDate) {
+    sql += ' AND DATE(i.InvoiceDate) BETWEEN ? AND ?';
+    params.push(startDate, endDate);
+  }
+  const [rows] = await pool.execute(sql, params);
+  const totalInvoices = Number(rows[0]?.totalInvoices || 0);
+  const totalRevenue = parseFloat(rows[0]?.totalRevenue || 0);
+  const avgOrderValue = totalInvoices > 0 ? Math.round(totalRevenue / totalInvoices) : 0;
+  return { totalInvoices, totalRevenue, avgOrderValue };
+};
+
+module.exports = { getRevenueByBranch, getTopSellingItems, getRevenueByRestaurant, getDashboardSummary };
