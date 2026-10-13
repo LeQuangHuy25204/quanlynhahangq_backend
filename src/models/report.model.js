@@ -3,15 +3,15 @@
 const { pool } = require('../config/db');
 
 /**
- * Doanh thu theo ngày trong khoảng thời gian (theo chi nhánh).
- * @param {number} branchId
+ * Doanh thu theo ngày trong khoảng thời gian.
+ * @param {number} restaurantId
+ * @param {number|null} branchId
  * @param {string} startDate - YYYY-MM-DD
  * @param {string} endDate   - YYYY-MM-DD
  */
-const getRevenueByBranch = async (branchId, startDate, endDate) => {
-  const [rows] = await pool.execute(
-    `SELECT
-       DATE(i.InvoiceDate) AS Date,
+const getRevenueByBranch = async (restaurantId, branchId, startDate, endDate) => {
+  let sql = `SELECT
+       DATE_FORMAT(i.InvoiceDate, '%Y-%m-%d') AS Date,
        COUNT(DISTINCT i.InvoiceID)  AS TotalInvoices,
        SUM(i.SubTotal)              AS SubTotal,
        SUM(i.VATAmount)             AS VATAmount,
@@ -20,22 +20,49 @@ const getRevenueByBranch = async (branchId, startDate, endDate) => {
        SUM(i.TotalAmount)           AS TotalRevenue
      FROM invoice i
      INNER JOIN payment p  ON i.InvoiceID  = p.InvoiceID
-     WHERE i.BranchID  = ?
+     INNER JOIN branch b   ON i.BranchID   = b.BranchID
+     WHERE b.RestaurantID = ?
        AND p.Status    = 1
-       AND DATE(i.InvoiceDate) BETWEEN ? AND ?
-     GROUP BY DATE(i.InvoiceDate)
-     ORDER BY DATE(i.InvoiceDate) DESC`,
-    [branchId, startDate, endDate]
-  );
+       AND DATE(i.InvoiceDate) BETWEEN ? AND ?`;
+  const params = [restaurantId, startDate, endDate];
+  if (branchId) {
+    sql += ' AND i.BranchID = ?';
+    params.push(branchId);
+  }
+  sql += ' GROUP BY DATE(i.InvoiceDate) ORDER BY DATE(i.InvoiceDate) ASC';
+  const [rows] = await pool.execute(sql, params);
   return rows;
 };
 
 /**
- * Top 10 món bán chạy nhất theo chi nhánh trong khoảng thời gian.
+ * Doanh thu theo từng khung giờ trong ngày (khi xem báo cáo theo ngày đơn lẻ hoặc hôm nay).
  */
-const getTopSellingItems = async (branchId, startDate, endDate, limit = 10) => {
-  const [rows] = await pool.execute(
-    `SELECT
+const getRevenueByHourly = async (restaurantId, branchId, date) => {
+  let sql = `SELECT
+       HOUR(i.InvoiceDate) AS Hour,
+       COUNT(DISTINCT i.InvoiceID) AS TotalInvoices,
+       SUM(i.TotalAmount)          AS TotalRevenue
+     FROM invoice i
+     INNER JOIN payment p ON i.InvoiceID = p.InvoiceID
+     INNER JOIN branch b  ON i.BranchID  = b.BranchID
+     WHERE b.RestaurantID = ?
+       AND p.Status = 1
+       AND DATE(i.InvoiceDate) = ?`;
+  const params = [restaurantId, date];
+  if (branchId) {
+    sql += ' AND i.BranchID = ?';
+    params.push(branchId);
+  }
+  sql += ' GROUP BY HOUR(i.InvoiceDate) ORDER BY Hour ASC';
+  const [rows] = await pool.execute(sql, params);
+  return rows;
+};
+
+/**
+ * Top món bán chạy nhất theo chi nhánh / toàn chuỗi trong khoảng thời gian.
+ */
+const getTopSellingItems = async (restaurantId, branchId, startDate, endDate, limit = 10) => {
+  let sql = `SELECT
        mi.MenuItemID,
        mi.Name        AS MenuItemName,
        mi.Unit,
@@ -47,14 +74,20 @@ const getTopSellingItems = async (branchId, startDate, endDate, limit = 10) => {
      INNER JOIN session s   ON o.SessionID  = s.SessionID
      INNER JOIN \`table\` t  ON s.TableID    = t.TableID
      INNER JOIN area a      ON t.AreaID     = a.AreaID
-     WHERE a.BranchID  = ?
+     INNER JOIN branch b    ON a.BranchID   = b.BranchID
+     WHERE b.RestaurantID = ?
        AND ol.Status  != 3
-       AND DATE(ol.CreatedAt) BETWEEN ? AND ?
-     GROUP BY mi.MenuItemID, mi.Name, mi.Unit
+       AND DATE(ol.CreatedAt) BETWEEN ? AND ?`;
+  const params = [restaurantId, startDate, endDate];
+  if (branchId) {
+    sql += ' AND a.BranchID = ?';
+    params.push(branchId);
+  }
+  sql += ` GROUP BY mi.MenuItemID, mi.Name, mi.Unit
      ORDER BY TotalQuantity DESC
-     LIMIT ?`,
-    [branchId, startDate, endDate, limit]
-  );
+     LIMIT ?`;
+  params.push(limit);
+  const [rows] = await pool.execute(sql, params);
   return rows;
 };
 
@@ -105,4 +138,4 @@ const getDashboardSummary = async (restaurantId, branchId, startDate, endDate) =
   return { totalInvoices, totalRevenue, avgOrderValue };
 };
 
-module.exports = { getRevenueByBranch, getTopSellingItems, getRevenueByRestaurant, getDashboardSummary };
+module.exports = { getRevenueByBranch, getRevenueByHourly, getTopSellingItems, getRevenueByRestaurant, getDashboardSummary };
