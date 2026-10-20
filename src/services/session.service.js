@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 const crypto = require('crypto');
 const sessionModel = require('../models/session.model');
@@ -93,9 +93,9 @@ const processQRScan = async (qrCode, branchId) => {
  * @param {string} guestName
  * @param {number} branchId
  */
-const joinSession = async (sessionCode, guestName, branchId) => {
+const joinSession = async (sessionCode, guestName, branchId, guestCount) => {
   if (!sessionCode || !guestName) {
-    const err = new Error('sessionCode (Token/JoinCode) vÃ  guestName lÃ  báº¯t buá»™c.');
+    const err = new Error('sessionCode (Token/JoinCode) và guestName là bắt buộc.');
     err.statusCode = 400;
     throw err;
   }
@@ -107,19 +107,19 @@ const joinSession = async (sessionCode, guestName, branchId) => {
     session = await sessionModel.findSessionByToken(sessionCode);
   }
   if (!session) {
-    const err = new Error('PhiÃªn khÃ´ng tá»“n táº¡i hoáº·c Ä‘Ã£ Ä‘Ã³ng.');
+    const err = new Error('Phiên không tồn tại hoặc đã đóng.');
     err.statusCode = 404;
     throw err;
   }
 
   if (session.BranchID !== parseInt(branchId, 10)) {
-    const err = new Error('PhiÃªn khÃ´ng thuá»™c chi nhÃ¡nh nÃ y.');
+    const err = new Error('Phiên không thuộc chi nhánh này.');
     err.statusCode = 403;
     throw err;
   }
 
   if (session.Status === SESSION_STATUS.CLOSED) {
-    const err = new Error('PhiÃªn bÃ n nÃ y Ä‘Ã£ Ä‘Ã³ng.');
+    const err = new Error('Phiên bàn này đã đóng.');
     err.statusCode = 409;
     throw err;
   }
@@ -129,7 +129,11 @@ const joinSession = async (sessionCode, guestName, branchId) => {
     guestName,
   });
 
-  return { participantId, sessionId: session.SessionID, guestName };
+  if (guestCount && parseInt(guestCount, 10) > 0) {
+    await sessionModel.updateGuestCount(session.SessionID, parseInt(guestCount, 10));
+  }
+
+  return { participantId, sessionId: session.SessionID, guestName, guestCount: guestCount || session.GuestCount };
 };
 
 /**

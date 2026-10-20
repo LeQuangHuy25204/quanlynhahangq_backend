@@ -130,6 +130,17 @@ const updateSessionStatus = async (sessionId, status) => {
   return result.affectedRows;
 };
 
+/**
+ * Cập nhật số lượng khách của Session.
+ */
+const updateGuestCount = async (sessionId, guestCount) => {
+  const [result] = await pool.execute(
+    `UPDATE session SET GuestCount = ? WHERE SessionID = ?`,
+    [guestCount, sessionId]
+  );
+  return result.affectedRows;
+};
+
 module.exports = {
   findTableByQRCode,
   findActiveSessionByTableId,
@@ -138,5 +149,6 @@ module.exports = {
   findSessionByJoinCode,
   addParticipant,
   findSessionById,
-  updateSessionStatus
+  updateSessionStatus,
+  updateGuestCount
 };
