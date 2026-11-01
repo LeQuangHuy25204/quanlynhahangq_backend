@@ -1,8 +1,10 @@
 'use strict';
 
 const crypto = require('crypto');
+const { pool } = require('../config/db');
 const sessionModel = require('../models/session.model');
-const { SESSION_STATUS } = require('../constants/status');
+const orderModel = require('../models/order.model');
+const { SESSION_STATUS, ORDER_STATUS } = require('../constants/status');
 
 const generateJoinCode = () =>
   crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 6);
@@ -172,8 +174,25 @@ const updateSessionStatus = async (sessionId, status, actorUser) => {
     return { sessionId, status: parsedStatus, message: 'Tráº¡ng thÃ¡i khÃ´ng Ä‘á»•i.' };
   }
 
-  await sessionModel.updateSessionStatus(sessionId, parsedStatus);
-  return { sessionId, status: parsedStatus, message: 'Cáº­p nháº­t tráº¡ng thÃ¡i thÃ nh cÃ´ng.' };
+  const affected = await sessionModel.updateSessionStatus(sessionId, parsedStatus);
+  if (parsedStatus === SESSION_STATUS.CLOSED && affected === 0) {
+    const err = new Error('Bàn đã có món gọi, chỉ được đóng bàn sau khi đã thanh toán.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // Nếu đóng bàn (hoặc hủy phiên khi chưa có món), dọn dẹp các order chưa thanh toán
+  if (parsedStatus === SESSION_STATUS.CLOSED) {
+    const [payments] = await pool.execute(
+      `SELECT 1 FROM invoice i INNER JOIN payment p ON p.InvoiceID = i.InvoiceID WHERE i.SessionID = ? AND p.Status = 1 LIMIT 1`,
+      [sessionId]
+    );
+    if (!payments || payments.length === 0) {
+      await orderModel.updateAllOrdersStatusInSession(sessionId, ORDER_STATUS.CANCELLED);
+    }
+  }
+
+  return { sessionId, status: parsedStatus, message: 'Cập nhật trạng thái thành công.' };
 };
 
 /**

@@ -53,11 +53,13 @@ const getMenu = async (branchId) => {
 };
 
 /**
- * Thêm món ăn mới ở cấp nhà hàng (RestaurantAdmin only).
- * restaurantId lấy từ req.user (JWT) — không từ body client.
+ * Thêm món ăn mới:
+ * - RestaurantAdmin: tạo món toàn chuỗi (branchId=null) hoặc món riêng cho chi nhánh (branchId chỉ định).
+ * - BranchManager: tạo món ăn riêng cho chi nhánh của mình (branchId = actorUser.branchId).
  */
 const addMenuItem = async (data, actorUser) => {
   const { categoryId, name, description, basePrice, urlImage, isWeightBased } = data;
+  const { ROLE_CODE } = require('../constants/status');
 
   if (!categoryId || !name || basePrice == null) {
     const err = new Error('categoryId, name và basePrice là bắt buộc.');
@@ -70,8 +72,21 @@ const addMenuItem = async (data, actorUser) => {
     throw err;
   }
 
+  let branchId = null;
+  if (actorUser.roleCode === ROLE_CODE.BRANCH_MANAGER) {
+    if (!actorUser.branchId) {
+      const err = new Error('Không xác định được chi nhánh của quản lý.');
+      err.statusCode = 400;
+      throw err;
+    }
+    branchId = actorUser.branchId;
+  } else if (actorUser.roleCode === ROLE_CODE.RESTAURANT_ADMIN) {
+    branchId = data.branchId ? parseInt(data.branchId, 10) : null;
+  }
+
   const insertId = await menuModel.createMenuItem({
-    restaurantId: actorUser.restaurantId, // từ JWT, không từ body
+    restaurantId: actorUser.restaurantId,
+    branchId,
     categoryId,
     name,
     description,
@@ -80,7 +95,7 @@ const addMenuItem = async (data, actorUser) => {
     isWeightBased: !!isWeightBased,
   });
 
-  return { menuItemId: insertId };
+  return { menuItemId: insertId, branchId };
 };
 
 /**
@@ -137,18 +152,20 @@ const getAdminMenu = async (branchId, actorUser) => {
   return {
     branchId: target,
     items: rows.map((r) => ({
-      menuItemId:      r.MenuItemID,
-      categoryId:      r.CategoryID,
-      categoryName:    r.CategoryName,
-      name:            r.Name,
-      description:     r.Description,
-      imageUrl:        r.url_Image,
-      unit:            r.Unit,
-      basePrice:       parseFloat(r.BasePrice),
-      overridePrice:   r.OverridePrice != null ? parseFloat(r.OverridePrice) : null,
-      isWeightBased:   r.IsWeightBased === 1,
-      isActive:        r.IsActive === 1,
-      branchAvailable: r.BranchAvailable === 1,
+      menuItemId:          r.MenuItemID,
+      branchId:            r.BranchID,
+      branchExclusiveName: r.BranchExclusiveName,
+      categoryId:          r.CategoryID,
+      categoryName:        r.CategoryName,
+      name:                r.Name,
+      description:         r.Description,
+      imageUrl:            r.url_Image,
+      unit:                r.Unit,
+      basePrice:           parseFloat(r.BasePrice),
+      overridePrice:       r.OverridePrice != null ? parseFloat(r.OverridePrice) : null,
+      isWeightBased:       r.IsWeightBased === 1,
+      isActive:            r.IsActive === 1,
+      branchAvailable:     r.BranchAvailable === 1,
     })),
   };
 };
@@ -180,6 +197,16 @@ const updateMenuItem = async (menuItemId, data, actorUser) => {
   if (!item || item.RestaurantID !== actorUser.restaurantId) {
     const err = new Error('Không tìm thấy món ăn.'); err.statusCode = 404; throw err;
   }
+
+  const { ROLE_CODE } = require('../constants/status');
+  if (actorUser.roleCode === ROLE_CODE.BRANCH_MANAGER) {
+    if (item.BranchID !== actorUser.branchId) {
+      const err = new Error('Quản lý chi nhánh chỉ được chỉnh sửa thông tin món riêng của chi nhánh mình. Với món toàn chuỗi, vui lòng dùng tính năng điều chỉnh chi nhánh.');
+      err.statusCode = 403;
+      throw err;
+    }
+  }
+
   const basePrice = data.basePrice != null ? parseFloat(data.basePrice) : parseFloat(item.BasePrice);
   if (isNaN(basePrice) || basePrice < 0) {
     const err = new Error('BasePrice không hợp lệ.'); err.statusCode = 400; throw err;
@@ -196,6 +223,12 @@ const updateMenuItem = async (menuItemId, data, actorUser) => {
   if (!name) {
     const err = new Error('Tên món không được trống.'); err.statusCode = 400; throw err;
   }
+
+  let branchId = item.BranchID;
+  if (actorUser.roleCode === ROLE_CODE.RESTAURANT_ADMIN && data.branchId !== undefined) {
+    branchId = data.branchId ? parseInt(data.branchId, 10) : null;
+  }
+
   await menuModel.updateMenuItem(menuItemId, {
     categoryId,
     name,
@@ -204,8 +237,9 @@ const updateMenuItem = async (menuItemId, data, actorUser) => {
     urlImage:      data.urlImage !== undefined ? data.urlImage : item.url_Image,
     isWeightBased: data.isWeightBased !== undefined ? !!data.isWeightBased : item.IsWeightBased === 1,
     isActive:      data.isActive !== undefined ? !!data.isActive : item.IsActive === 1,
+    branchId,
   });
-  return { menuItemId: parseInt(menuItemId, 10) };
+  return { menuItemId: parseInt(menuItemId, 10), branchId };
 };
 
 module.exports = { getMenu, addMenuItem, setBranchOverride, getAdminMenu, getCategories, createCategory, updateMenuItem };

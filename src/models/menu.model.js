@@ -16,6 +16,7 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
     const [rows] = await pool.execute(
       `SELECT
          mi.MenuItemID,
+         mi.BranchID,
          mi.Name,
          mi.Description,
          mi.url_Image,
@@ -33,9 +34,10 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
              AND (bmo.EndDate   IS NULL OR bmo.EndDate   >= NOW())
        WHERE mi.IsActive      = 1
          AND mi.RestaurantID  = ?
+         AND (mi.BranchID IS NULL OR mi.BranchID = ?)
          AND (bmo.IsAvailable IS NULL OR bmo.IsAvailable = 1)
        ORDER BY c.Name ASC, mi.Name ASC`,
-      [branchId, restaurantId]
+      [branchId, restaurantId, branchId]
     );
     return rows;
   }
@@ -43,6 +45,7 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
   const [rows] = await pool.execute(
     `SELECT
        mi.MenuItemID,
+       mi.BranchID,
        mi.Name,
        mi.Description,
        mi.url_Image,
@@ -55,6 +58,7 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
      INNER JOIN category c ON mi.CategoryID = c.CategoryID
      WHERE mi.IsActive     = 1
        AND mi.RestaurantID = ?
+       AND mi.BranchID IS NULL
      ORDER BY c.Name ASC, mi.Name ASC`,
     [restaurantId]
   );
@@ -62,15 +66,14 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
 };
 
 /**
- * Thêm món ăn mới ở cấp nhà hàng (RestaurantAdmin only).
- * BR-21: restaurantId lấy từ req.user, không từ client.
+ * Thêm món ăn mới (ở cấp toàn chuỗi nếu branchId=null, hoặc riêng chi nhánh nếu branchId có giá trị).
  */
-const createMenuItem = async ({ restaurantId, categoryId, name, description, basePrice, urlImage, isWeightBased }) => {
+const createMenuItem = async ({ restaurantId, branchId, categoryId, name, description, basePrice, urlImage, isWeightBased }) => {
   const [result] = await pool.execute(
     `INSERT INTO menuitem
-       (RestaurantID, CategoryID, Name, Description, BasePrice, url_Image, IsWeightBased, IsActive)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-    [restaurantId, categoryId, name, description || null, basePrice, urlImage || null, isWeightBased ? 1 : 0]
+       (RestaurantID, BranchID, CategoryID, Name, Description, BasePrice, url_Image, IsWeightBased, IsActive)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [restaurantId, branchId || null, categoryId, name, description || null, basePrice, urlImage || null, isWeightBased ? 1 : 0]
   );
   return result.insertId;
 };
@@ -122,22 +125,26 @@ const getCurrentPriceForBranch = async (menuItemId, branchId, restaurantId) => {
 /**
  * Danh sách món cho màn quản trị: gồm cả món ngừng bán (IsActive = 0) và món bị
  * chi nhánh ẩn, kèm giá gốc / giá đè của chi nhánh đang chọn.
+ * Hiển thị món toàn chuỗi (BranchID IS NULL) và món riêng của chi nhánh đó (BranchID = branchId).
  */
 const findAllMenuItemsForAdmin = async (restaurantId, branchId) => {
   const [rows] = await pool.execute(
     `SELECT
-       mi.MenuItemID, mi.CategoryID, c.Name AS CategoryName,
+       mi.MenuItemID, mi.RestaurantID, mi.BranchID, b.Name AS BranchExclusiveName,
+       mi.CategoryID, c.Name AS CategoryName,
        mi.Name, mi.Description, mi.url_Image, mi.Unit,
        mi.BasePrice, mi.IsWeightBased, mi.IsActive,
        bmo.OverridePrice,
        CASE WHEN bmo.BranchMenuOverrideID IS NULL THEN 1 ELSE bmo.IsAvailable END AS BranchAvailable
      FROM menuitem mi
      INNER JOIN category c ON mi.CategoryID = c.CategoryID
+     LEFT JOIN branch b ON b.BranchID = mi.BranchID
      LEFT JOIN branchmenuoverride bmo
             ON bmo.MenuItemID = mi.MenuItemID AND bmo.BranchID = ?
      WHERE mi.RestaurantID = ?
+       AND (mi.BranchID IS NULL OR mi.BranchID = ?)
      ORDER BY c.Name ASC, mi.Name ASC`,
-    [branchId, restaurantId]
+    [branchId, restaurantId, branchId]
   );
   return rows;
 };
@@ -172,20 +179,23 @@ const createCategory = async ({ restaurantId, name, description }) => {
 
 const findMenuItemById = async (menuItemId) => {
   const [rows] = await pool.execute(
-    `SELECT MenuItemID, RestaurantID, CategoryID, Name, Description, BasePrice, url_Image, IsWeightBased, IsActive
+    `SELECT MenuItemID, RestaurantID, BranchID, CategoryID, Name, Description, BasePrice, url_Image, IsWeightBased, IsActive
      FROM menuitem WHERE MenuItemID = ?`,
     [menuItemId]
   );
   return rows[0] || null;
 };
 
-const updateMenuItem = async (menuItemId, { categoryId, name, description, basePrice, urlImage, isWeightBased, isActive }) => {
-  const [result] = await pool.execute(
-    `UPDATE menuitem
-     SET CategoryID = ?, Name = ?, Description = ?, BasePrice = ?, url_Image = ?, IsWeightBased = ?, IsActive = ?
-     WHERE MenuItemID = ?`,
-    [categoryId, name, description || null, basePrice, urlImage || null, isWeightBased ? 1 : 0, isActive ? 1 : 0, menuItemId]
-  );
+const updateMenuItem = async (menuItemId, { categoryId, name, description, basePrice, urlImage, isWeightBased, isActive, branchId }) => {
+  let query = `UPDATE menuitem SET CategoryID = ?, Name = ?, Description = ?, BasePrice = ?, url_Image = ?, IsWeightBased = ?, IsActive = ?`;
+  const params = [categoryId, name, description || null, basePrice, urlImage || null, isWeightBased ? 1 : 0, isActive ? 1 : 0];
+  if (branchId !== undefined) {
+    query += `, BranchID = ?`;
+    params.push(branchId || null);
+  }
+  query += ` WHERE MenuItemID = ?`;
+  params.push(menuItemId);
+  const [result] = await pool.execute(query, params);
   return result.affectedRows;
 };
 

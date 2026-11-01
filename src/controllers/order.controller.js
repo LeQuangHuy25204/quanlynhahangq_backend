@@ -16,6 +16,18 @@ const placeOrder = async (req, res, next) => {
 };
 
 /**
+ * POST /api/orders/staff-add
+ * Body: { sessionId, items: [{ menuItemId, quantity, note? }] }
+ */
+const staffAddItems = async (req, res, next) => {
+  try {
+    const { sessionId, items } = req.body;
+    const result = await orderService.staffAddItems(sessionId, items, req.user);
+    res.status(201).json({ success: true, message: 'Thêm món vào bàn thành công.', data: result });
+  } catch (err) { next(err); }
+};
+
+/**
  * PUT /api/orders/lines/:orderLineId/weight
  * Body: { quantity: number (decimal) }
  */
@@ -100,4 +112,4 @@ const trackOrderByToken = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
+module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };

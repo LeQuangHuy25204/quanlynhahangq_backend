@@ -31,20 +31,20 @@ router.post('/categories', authenticate, requireRole('RestaurantAdmin'), menuCon
 
 /**
  * @route   PUT /api/menu/items/:menuItemId
- * @desc    Sửa món gốc (tên, giá gốc, danh mục, ngừng bán...)
- * @access  RestaurantAdmin
+ * @desc    Sửa món (Admin sửa mọi món; BranchManager sửa món riêng của chi nhánh mình)
+ * @access  BranchManager, RestaurantAdmin
  */
-router.put('/items/:menuItemId', authenticate, requireRole('RestaurantAdmin'), menuController.updateMenuItem);
+router.put('/items/:menuItemId', authenticate, requireRole('BranchManager', 'RestaurantAdmin'), menuController.updateMenuItem);
 
 /**
  * @route   POST /api/menu/items
- * @desc    Thêm món ăn gốc ở cấp nhà hàng
- * @access  RestaurantAdmin
+ * @desc    Thêm món mới (Admin thêm món chuỗi/chi nhánh; BranchManager thêm món riêng chi nhánh)
+ * @access  BranchManager, RestaurantAdmin
  */
 router.post(
   '/items',
   authenticate,
-  requireRole('RestaurantAdmin'),
+  requireRole('BranchManager', 'RestaurantAdmin'),
   menuController.addMenuItem
 );
 

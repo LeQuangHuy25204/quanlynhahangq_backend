@@ -64,11 +64,12 @@ const createSession = async ({ tableId, sessionToken, joinCode, status, guestCou
  */
 const findSessionByToken = async (sessionToken) => {
   const [rows] = await pool.execute(
-    `SELECT s.SessionID, s.TableID, s.Status, s.JoinCode,
-            t.Name AS TableName, a.BranchID
+    `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode,
+            t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
      INNER JOIN area a ON t.AreaID = a.AreaID
+     INNER JOIN branch b ON a.BranchID = b.BranchID
      WHERE s.SessionToken = ?`,
     [sessionToken]
   );
@@ -88,15 +89,27 @@ const addParticipant = async ({ sessionId, guestName }) => {
 };
 
 /**
+ * Tìm participant theo tên trong một phiên (dùng cho order do nhân viên thêm).
+ */
+const findParticipantByName = async (sessionId, guestName) => {
+  const [rows] = await pool.execute(
+    `SELECT * FROM sessionparticipant WHERE SessionID = ? AND GuestName = ? LIMIT 1`,
+    [sessionId, guestName]
+  );
+  return rows[0] || null;
+};
+
+/**
  * Tìm session bằng JoinCode (khi người thứ 2 tham gia).
  */
 const findSessionByJoinCode = async (joinCode) => {
   const [rows] = await pool.execute(
     `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode,
-            t.Name AS TableName, a.BranchID
+            t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
      INNER JOIN area a ON t.AreaID = a.AreaID
+     INNER JOIN branch b ON a.BranchID = b.BranchID
      WHERE s.JoinCode = ?`,
     [joinCode]
   );
@@ -109,10 +122,11 @@ const findSessionByJoinCode = async (joinCode) => {
 const findSessionById = async (sessionId) => {
   const [rows] = await pool.execute(
     `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode,
-            t.Name AS TableName, a.BranchID
+            t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
      INNER JOIN area a ON t.AreaID = a.AreaID
+     INNER JOIN branch b ON a.BranchID = b.BranchID
      WHERE s.SessionID = ?`,
     [sessionId]
   );
@@ -121,11 +135,29 @@ const findSessionById = async (sessionId) => {
 
 /**
  * Cập nhật trạng thái Session.
+ * Quy tắc đóng bàn (Status = 2):
+ *  1. Đã thanh toán thành công (Payment.Status = 1)
+ *  HOẶC
+ *  2. Bàn chưa có order hay món nào (hoặc tất cả món đã bị hủy) -> được phép đóng ngay.
  */
 const updateSessionStatus = async (sessionId, status) => {
   const [result] = await pool.execute(
-    `UPDATE session SET Status = ? WHERE SessionID = ?`,
-    [status, sessionId]
+    `UPDATE session SET Status = ?
+     WHERE SessionID = ?
+       AND (
+         ? <> 2
+         OR EXISTS (
+           SELECT 1 FROM invoice i
+           INNER JOIN payment p ON p.InvoiceID = i.InvoiceID
+           WHERE i.SessionID = session.SessionID AND p.Status = 1
+         )
+         OR NOT EXISTS (
+           SELECT 1 FROM \`order\` o
+           INNER JOIN orderline ol ON ol.OrderID = o.OrderID
+           WHERE o.SessionID = session.SessionID AND ol.Status <> 3
+         )
+       )`,
+    [status, sessionId, status]
   );
   return result.affectedRows;
 };
@@ -148,6 +180,7 @@ module.exports = {
   findSessionByToken,
   findSessionByJoinCode,
   addParticipant,
+  findParticipantByName,
   findSessionById,
   updateSessionStatus,
   updateGuestCount

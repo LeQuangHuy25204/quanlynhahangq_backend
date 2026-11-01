@@ -28,9 +28,6 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
     throw err;
   }
 
-  // restaurantId cố định từ env
-  const restaurantId = parseInt(process.env.RESTAURANT_ID, 10);
-
   // ── Kiểm tra Session ─────────────────────────────────────
   const session = await sessionModel.findSessionByToken(sessionToken);
   if (!session) {
@@ -38,6 +35,9 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
     err.statusCode = 404;
     throw err;
   }
+
+  // restaurantId từ phiên bàn hoặc env (fallback 1)
+  const restaurantId = session.RestaurantID || parseInt(process.env.RESTAURANT_ID, 10) || 1;
   if (session.Status !== SESSION_STATUS.OPEN) {
     const err = new Error(
       session.Status === SESSION_STATUS.WAITING_OPEN
@@ -231,6 +231,67 @@ const updateOrderLineStatus = async (orderLineId, status, actorUser) => {
 };
 
 /**
+ * Quy tắc trước khi chuyển bàn sang CHỜ THANH TOÁN:
+ *  - Phiên phải đang phục vụ (OPEN).
+ *  - Phải có món được gọi (không được yêu cầu thanh toán khi chưa có món nào).
+ *  - Không được còn món đang chế biến (COOKING - 4).
+ *  - Không được còn món đang chờ phục vụ (READY - 5).
+ *  - Món đã order nhưng chưa xác nhận (CHỜ XÁC NHẬN / CHỜ CÂN) sẽ bị hủy;
+ *    tạm tính tự tính lại vì chỉ tính các món không bị hủy.
+ *  - Sau khi hủy món chưa xác nhận, bàn phải còn ít nhất 1 món để thanh toán.
+ */
+const prepareSessionForPayment = async (sessionId, actorUser = null) => {
+  const session = await sessionModel.findSessionById(sessionId);
+  if (!session || session.Status !== SESSION_STATUS.OPEN) {
+    const err = new Error('Chỉ được yêu cầu thanh toán khi bàn đang phục vụ.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const lines = await orderModel.findOrderLinesBySessionId(sessionId);
+  const activeLines = lines.filter(l => l.Status !== ORDER_LINE_STATUS.CANCELLED);
+  if (activeLines.length === 0) {
+    const err = new Error('Bàn chưa có món nào được gọi, không thể yêu cầu thanh toán.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  if (lines.some(l => l.Status === ORDER_LINE_STATUS.COOKING)) {
+    const err = new Error('Còn món đang chế biến, chưa thể yêu cầu thanh toán.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  if (lines.some(l => l.Status === ORDER_LINE_STATUS.READY)) {
+    const err = new Error('Còn món đang chờ phục vụ (bếp đã nấu xong, chưa mang ra bàn), vui lòng phục vụ món trước khi yêu cầu thanh toán.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const billableLines = lines.filter(l =>
+    l.Status !== ORDER_LINE_STATUS.CANCELLED &&
+    l.Status !== ORDER_LINE_STATUS.WAITING_CONFIRM &&
+    l.Status !== ORDER_LINE_STATUS.WAITING_WEIGH
+  );
+  if (billableLines.length === 0) {
+    const err = new Error('Bàn chưa có món nào được xác nhận hoặc phục vụ để thanh toán.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const unconfirmed = lines.filter(l =>
+    l.Status === ORDER_LINE_STATUS.WAITING_CONFIRM || l.Status === ORDER_LINE_STATUS.WAITING_WEIGH
+  );
+  for (const line of unconfirmed) {
+    await orderModel.cancelOrderLine(line.OrderLineID, {
+      cancelledBy: actorUser?.staffId ?? null,
+      cancelReason: 'Món chưa xác nhận khi yêu cầu thanh toán',
+    });
+  }
+  return { cancelledCount: unconfirmed.length };
+};
+
+/**
  * Khách hàng yêu cầu thanh toán.
  * Đổi trạng thái Order sang WAITING_PAYMENT.
  */
@@ -259,6 +320,7 @@ const requestPayment = async (orderId, sessionToken) => {
     throw err;
   }
 
+  await prepareSessionForPayment(order.SessionID);
   await orderModel.updateAllOrdersStatusInSession(order.SessionID, ORDER_STATUS.WAITING_PAYMENT);
 
   // [GIẢ LẬP] Bắn socket báo cho thu ngân
@@ -278,8 +340,10 @@ const staffRequestPayment = async (orderId, actorUser) => {
   if (order.Status === ORDER_STATUS.CANCELLED) {
     const err = new Error('Đơn hàng này đã bị hủy.'); err.statusCode = 409; throw err;
   }
+  const { cancelledCount } = await prepareSessionForPayment(order.SessionID, actorUser);
   await orderModel.updateAllOrdersStatusInSession(order.SessionID, ORDER_STATUS.WAITING_PAYMENT);
-  return { orderId, status: ORDER_STATUS.WAITING_PAYMENT, message: 'Đã báo thu ngân bàn cần thanh toán.' };
+  const suffix = cancelledCount ? ` (đã hủy ${cancelledCount} món chưa xác nhận)` : '';
+  return { orderId, status: ORDER_STATUS.WAITING_PAYMENT, cancelledCount, message: `Đã báo thu ngân bàn cần thanh toán${suffix}.` };
 };
 
 /**
@@ -321,6 +385,35 @@ const getOrderLinesBySession = async (sessionId) => {
   return await orderModel.findOrderLinesBySessionId(sessionId);
 };
 
+/**
+ * Nhân viên thêm món mới vào bàn đang phục vụ.
+ * Tái sử dụng placeOrder (snapshot giá BR-07) với participant riêng của nhân viên.
+ */
+const staffAddItems = async (sessionId, items, actorUser) => {
+  const session = await sessionModel.findSessionById(sessionId);
+  if (!session) {
+    const err = new Error('Không tìm thấy phiên bàn.'); err.statusCode = 404; throw err;
+  }
+
+  const { ROLE_CODE } = require('../constants/status');
+  if (actorUser.roleCode !== ROLE_CODE.RESTAURANT_ADMIN && session.BranchID !== actorUser.branchId) {
+    const err = new Error('Bạn không có quyền thêm món cho bàn của chi nhánh khác.'); err.statusCode = 403; throw err;
+  }
+
+  const staffName = `NV: ${actorUser.fullName || actorUser.username || actorUser.staffId}`;
+  let participant = await sessionModel.findParticipantByName(session.SessionID, staffName);
+  const participantId = participant
+    ? Object.values(participant)[0]
+    : await sessionModel.addParticipant({ sessionId: session.SessionID, guestName: staffName });
+
+  return await placeOrder({
+    sessionToken: session.SessionToken,
+    participantId,
+    branchId: session.BranchID,
+    items,
+  });
+};
+
 const getOrdersByBranch = async (branchId, status = null) => {
   return await orderModel.findOrdersByBranch(branchId, status);
 };
@@ -345,4 +438,4 @@ const trackOrderByToken = async (sessionToken) => {
   };
 };
 
-module.exports = { placeOrder, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
+module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };

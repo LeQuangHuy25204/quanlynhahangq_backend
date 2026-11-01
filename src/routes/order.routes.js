@@ -21,6 +21,20 @@ const { requireRole }  = require('../middlewares/roleMiddleware');
 router.post('/', orderController.placeOrder);
 
 /**
+ * @route   POST /api/orders/staff-add
+ * @desc    Nhân viên thêm món mới vào bàn đang phục vụ
+ * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ * @body    { sessionId, items: [{ menuItemId, quantity, note? }] }
+ */
+router.post(
+  '/staff-add',
+  authenticate,
+  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  orderController.staffAddItems
+);
+
+
+/**
  * @route   GET /api/orders
  * @desc    Lấy tất cả các order và món ăn theo chi nhánh cho Waiter/Staff
  * @access  Protected

@@ -80,7 +80,7 @@ const completePayment = async (paymentId, status, transactionNo = null, paymentM
  */
 const findValidOrderLinesBySessionId = async (sessionId) => {
   const [rows] = await pool.execute(
-    `SELECT ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, ol.PromotionID,
+    `SELECT ol.OrderLineID, ol.MenuItemID, mi.CategoryID, mi.Name AS MenuItemName, ol.PromotionID,
             ol.Quantity, ol.UnitPrice, ol.LineTotal, ol.Note, ol.Status, ol.DiscountApplied
      FROM orderline ol
      INNER JOIN \`order\` o ON ol.OrderID = o.OrderID

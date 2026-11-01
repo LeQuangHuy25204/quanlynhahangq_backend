@@ -19,12 +19,16 @@ router.get(
   async (req, res, next) => {
     try {
       const { restaurantId, roleCode, branchId } = req.user;
+      const { activeOnly } = req.query;
       const params = [restaurantId];
-      let sql = `SELECT BranchID, Name, Address, Phone, VATRate, ServiceFeeRate, IsActive
-                 FROM branch WHERE RestaurantID = ? AND IsActive = 1`;
+      let sql = `SELECT BranchID, Name, Address, Phone, BussinessStartHour, VATRate, ServiceFeeRate, TaxCode, IsActive
+                 FROM branch WHERE RestaurantID = ?`;
       if (roleCode !== 'RestaurantAdmin') {
         sql += ' AND BranchID = ?';
         params.push(branchId);
+      }
+      if (activeOnly === '1' || activeOnly === 'true') {
+        sql += ' AND IsActive = 1';
       }
       sql += ' ORDER BY Name ASC';
       const [rows] = await pool.execute(sql, params);

@@ -38,7 +38,7 @@ const findRoleByCode = async (roleCode) => {
  */
 const verifyBranchBelongsToRestaurant = async (branchId, restaurantId) => {
   const [rows] = await pool.execute(
-    `SELECT BranchID FROM branch WHERE BranchID = ? AND RestaurantID = ? AND IsActive = 1 LIMIT 1`,
+    `SELECT BranchID, IsActive FROM branch WHERE BranchID = ? AND RestaurantID = ? LIMIT 1`,
     [branchId, restaurantId]
   );
   return rows[0] || null;

@@ -2,6 +2,7 @@
 
 const paymentModel   = require('../models/payment.model');
 const promotionModel = require('../models/promotion.model');
+const promotionService = require('./promotion.service');
 const sessionModel   = require('../models/session.model');
 const { PAYMENT_STATUS, ORDER_LINE_STATUS, SESSION_STATUS, ROLE_CODE } = require('../constants/status');
 
@@ -55,11 +56,15 @@ const computeTotals = async (sessionId, actorUser, promotionId = null) => {
   let promotion = null;
   let discountAmount = 0;
   if (promotionId) {
-    promotion = await promotionModel.findActivePromotion(promotionId, actorUser.restaurantId);
-    if (!promotion) throw httpError('Mã khuyến mãi không hợp lệ hoặc đã hết hạn.', 400);
-    discountAmount = promotion.DiscountType === 'PERCENT'
-      ? subTotal * (parseFloat(promotion.DiscountValue) / 100)
-      : Math.min(parseFloat(promotion.DiscountValue), subTotal);
+    promotion = await promotionModel.findActivePromotion(promotionId, actorUser.restaurantId, session.BranchID);
+    if (!promotion) throw httpError('Mã khuyến mãi không hợp lệ, đã hết hạn hoặc không áp dụng cho chi nhánh này.', 400);
+
+    const menuItemIds = promotion.ApplyLevel === 'MENU_ITEM'
+      ? await promotionModel.findPromotionMenuItemIds(promotion.PromotionID)
+      : [];
+    const result = promotionService.evaluatePromotion(promotion, lines, subTotal, menuItemIds);
+    if (!result.ok) throw httpError(result.reason, 400);
+    discountAmount = result.discountAmount;
   }
 
   const totalAmount = subTotal + vatAmount + serviceFeeAmount - discountAmount;

@@ -15,18 +15,16 @@ router.get('/', authenticate, requireRole('Cashier', 'BranchManager', 'Restauran
 
 /**
  * @route   POST /api/promotions
- * @desc    Tạo mới khuyến mãi
- * @access  RestaurantAdmin
- * @body    { name, description?, discountType: 'PERCENT'|'FIXED', discountValue, startDate, endDate? }
+ * @desc    Tạo mới khuyến mãi (Admin tạo toàn chuỗi/chi nhánh; BranchManager tạo cho chi nhánh mình)
+ * @access  BranchManager, RestaurantAdmin
  */
-router.post('/', authenticate, requireRole('RestaurantAdmin'), promotionController.createPromotion);
+router.post('/', authenticate, requireRole('BranchManager', 'RestaurantAdmin'), promotionController.createPromotion);
 
 /**
  * @route   PUT /api/promotions/:promotionId
  * @desc    Cập nhật / kích hoạt / tắt khuyến mãi
- * @access  RestaurantAdmin
- * @body    { name?, description?, discountType?, discountValue?, startDate?, endDate?, isActive? }
+ * @access  BranchManager, RestaurantAdmin
  */
-router.put('/:promotionId', authenticate, requireRole('RestaurantAdmin'), promotionController.updatePromotion);
+router.put('/:promotionId', authenticate, requireRole('BranchManager', 'RestaurantAdmin'), promotionController.updatePromotion);
 
 module.exports = router;

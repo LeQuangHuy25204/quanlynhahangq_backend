@@ -25,27 +25,27 @@ router.post('/join', sessionController.joinSession);
 
 /**
  * @route   PUT /api/sessions/:sessionId/status
- * @desc    Nhân viên xác nhận mở bàn (từ 0 -> 1) hoặc đóng bàn (từ 1 -> 2)
- * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ * @desc    Nhân viên, Thu ngân, Quản lý xác nhận mở bàn (0 -> 1) hoặc đóng bàn (1 -> 2)
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
  * @body    { status: number }
  */
 router.put(
   '/:sessionId/status',
   authenticate,
-  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
   sessionController.updateSessionStatus
 );
 
 /**
  * @route   POST /api/sessions/open
- * @desc    Nhân viên mở bàn thủ công
- * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ * @desc    Nhân viên, Thu ngân, Quản lý mở bàn thủ công
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
  * @body    { tableId: number, guestCount: number, note: string }
  */
 router.post(
   '/open',
   authenticate,
-  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
   sessionController.manualOpenSession
 );
 

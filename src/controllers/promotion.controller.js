@@ -4,7 +4,7 @@ const promotionService = require('../services/promotion.service');
 
 const getPromotions = async (req, res, next) => {
   try {
-    const data = await promotionService.getPromotions(req.user);
+    const data = await promotionService.getPromotions(req.user, req.query.branchId);
     res.status(200).json({ success: true, data });
   } catch (err) { next(err); }
 };
