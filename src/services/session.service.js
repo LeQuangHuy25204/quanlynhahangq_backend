@@ -48,12 +48,18 @@ const processQRScan = async (qrCode, branchId) => {
 
   const existingSession = await sessionModel.findActiveSessionByTableId(table.TableID);
   if (existingSession) {
+    const participants = await sessionModel.getSessionParticipants(existingSession.SessionID);
+    const hasHost = participants.length > 0;
+
     return {
-      isNew:        false,
-      sessionId:    existingSession.SessionID,
-      sessionToken: existingSession.SessionToken,
-      joinCode:     existingSession.JoinCode,
-      status:       existingSession.Status,
+      isNew:            !hasHost,
+      requiresJoinCode: hasHost,
+      participantCount: participants.length,
+      hostName:         hasHost ? participants[0].GuestName : null,
+      sessionId:        existingSession.SessionID,
+      sessionToken:     hasHost ? null : existingSession.SessionToken,
+      joinCode:         hasHost ? null : existingSession.JoinCode,
+      status:           existingSession.Status,
       table: {
         tableId:   table.TableID,
         tableName: table.TableName,
@@ -62,7 +68,7 @@ const processQRScan = async (qrCode, branchId) => {
     };
   }
 
-  // Táº¡o session má»›i â€” CHá»œ Má»ž BÃ€N
+  // Tạo session mới — CHỜ MỞ BÀN
   const sessionToken = crypto.randomUUID();
   const joinCode     = generateJoinCode();
 
@@ -74,11 +80,14 @@ const processQRScan = async (qrCode, branchId) => {
   });
 
   return {
-    isNew:        true,
-    sessionId:    newSessionId,
+    isNew:            true,
+    requiresJoinCode: false,
+    participantCount: 0,
+    hostName:         null,
+    sessionId:        newSessionId,
     sessionToken,
     joinCode,
-    status:       SESSION_STATUS.WAITING_OPEN,
+    status:           SESSION_STATUS.WAITING_OPEN,
     table: {
       tableId:   table.TableID,
       tableName: table.TableName,
@@ -95,21 +104,27 @@ const processQRScan = async (qrCode, branchId) => {
  * @param {string} guestName
  * @param {number} branchId
  */
-const joinSession = async (sessionCode, guestName, branchId, guestCount) => {
+const joinSession = async (sessionCode, guestName, branchId, guestCount, sessionId = null) => {
   if (!sessionCode || !guestName) {
-    const err = new Error('sessionCode (Token/JoinCode) và guestName là bắt buộc.');
+    const err = new Error('Mã tham gia và tên người dùng là bắt buộc.');
     err.statusCode = 400;
     throw err;
   }
 
+  const trimmedCode = String(sessionCode).trim();
+  const trimmedName = String(guestName).trim();
+
   let session;
-  if (sessionCode.length === 6) {
-    session = await sessionModel.findSessionByJoinCode(sessionCode);
+  if (sessionId) {
+    session = await sessionModel.findSessionById(sessionId);
+  } else if (trimmedCode.length === 6) {
+    session = await sessionModel.findSessionByJoinCode(trimmedCode.toUpperCase());
   } else {
-    session = await sessionModel.findSessionByToken(sessionCode);
+    session = await sessionModel.findSessionByToken(trimmedCode);
   }
+
   if (!session) {
-    const err = new Error('Phiên không tồn tại hoặc đã đóng.');
+    const err = new Error('Phiên không tồn tại hoặc mã tham gia không hợp lệ.');
     err.statusCode = 404;
     throw err;
   }
@@ -126,16 +141,52 @@ const joinSession = async (sessionCode, guestName, branchId, guestCount) => {
     throw err;
   }
 
+  const existingParticipants = await sessionModel.getSessionParticipants(session.SessionID);
+  const isFirstGuest = existingParticipants.length === 0;
+
+  if (!isFirstGuest) {
+    // Người thứ 2, 3, 4...: Bàn phải được mở (Status = 1) và bắt buộc phải nhập đúng JoinCode
+    if (session.Status === SESSION_STATUS.WAITING_OPEN) {
+      const err = new Error('Bàn đang chờ nhân viên xác nhận mở bàn. Vui lòng đợi bàn mở rồi nhập mã tham gia.');
+      err.statusCode = 409;
+      throw err;
+    }
+
+    if (trimmedCode.toUpperCase() !== String(session.JoinCode).toUpperCase()) {
+      const err = new Error('Mã tham gia không chính xác! Vui lòng kiểm tra mã trên màn hình của người đầu tiên trong bàn.');
+      err.statusCode = 400;
+      throw err;
+    }
+  } else {
+    // Người đầu tiên: xác thực bằng SessionToken hoặc JoinCode của phiên đó
+    const validToken = trimmedCode === session.SessionToken;
+    const validJoinCode = trimmedCode.toUpperCase() === String(session.JoinCode).toUpperCase();
+    if (!validToken && !validJoinCode) {
+      const err = new Error('Mã phiên bàn không hợp lệ.');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
   const participantId = await sessionModel.addParticipant({
     sessionId: session.SessionID,
-    guestName,
+    guestName: trimmedName,
   });
 
-  if (guestCount && parseInt(guestCount, 10) > 0) {
+  if (isFirstGuest && guestCount && parseInt(guestCount, 10) > 0) {
     await sessionModel.updateGuestCount(session.SessionID, parseInt(guestCount, 10));
   }
 
-  return { participantId, sessionId: session.SessionID, guestName, guestCount: guestCount || session.GuestCount };
+  return {
+    participantId,
+    sessionId:    session.SessionID,
+    sessionToken: session.SessionToken,
+    joinCode:     session.JoinCode,
+    status:       session.Status,
+    guestName:    trimmedName,
+    guestCount:   (isFirstGuest && guestCount) ? parseInt(guestCount, 10) : session.GuestCount,
+    isHost:       isFirstGuest,
+  };
 };
 
 /**
@@ -257,11 +308,19 @@ const manualOpenSession = async (tableId, guestCount, actorUser) => {
 
 
 /**
- * Lay thong tin phien theo SessionID.
+ * Lấy thông tin phiên theo SessionID (kèm số lượng & danh sách người tham gia).
  */
 const getSessionById = async (sessionId) => {
   const session = await sessionModel.findSessionById(sessionId);
-  return session || null;
+  if (!session) return null;
+
+  const participants = await sessionModel.getSessionParticipants(sessionId);
+  return {
+    ...session,
+    participantCount: participants.length,
+    hostName: participants.length > 0 ? participants[0].GuestName : null,
+    participants,
+  };
 };
 
 module.exports = { processQRScan, joinSession, updateSessionStatus, manualOpenSession, getSessionById };

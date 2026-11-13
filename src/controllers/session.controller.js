@@ -20,12 +20,12 @@ const qrScan = async (req, res, next) => {
 
 /**
  * POST /api/sessions/join
- * Body: { sessionCode, guestName, branchId }
+ * Body: { sessionCode, guestName, branchId, guestCount, sessionId }
  */
 const joinSession = async (req, res, next) => {
   try {
-    const { sessionCode, guestName, branchId, guestCount } = req.body;
-    const data = await sessionService.joinSession(sessionCode, guestName, branchId, guestCount);
+    const { sessionCode, guestName, branchId, guestCount, sessionId } = req.body;
+    const data = await sessionService.joinSession(sessionCode, guestName, branchId, guestCount, sessionId);
     res.status(200).json({ success: true, message: 'Tham gia phiên thành công.', data });
   } catch (err) { next(err); }
 };

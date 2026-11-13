@@ -100,17 +100,35 @@ const findParticipantByName = async (sessionId, guestName) => {
 };
 
 /**
+ * Lấy danh sách khách hàng đã tham gia phiên (không tính nhân viên order hộ 'NV: %').
+ */
+const getSessionParticipants = async (sessionId) => {
+  const [rows] = await pool.execute(
+    `SELECT ParticipantID, GuestName, JoinedAt
+     FROM sessionparticipant
+     WHERE SessionID = ?
+       AND Status = 1
+       AND GuestName NOT LIKE 'NV: %'
+     ORDER BY ParticipantID ASC`,
+    [sessionId]
+  );
+  return rows;
+};
+
+/**
  * Tìm session bằng JoinCode (khi người thứ 2 tham gia).
  */
 const findSessionByJoinCode = async (joinCode) => {
   const [rows] = await pool.execute(
-    `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode,
+    `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode, s.GuestCount,
             t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
      INNER JOIN area a ON t.AreaID = a.AreaID
      INNER JOIN branch b ON a.BranchID = b.BranchID
-     WHERE s.JoinCode = ?`,
+     WHERE s.JoinCode = ?
+     ORDER BY s.SessionID DESC
+     LIMIT 1`,
     [joinCode]
   );
   return rows[0] || null;
@@ -121,7 +139,7 @@ const findSessionByJoinCode = async (joinCode) => {
  */
 const findSessionById = async (sessionId) => {
   const [rows] = await pool.execute(
-    `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode,
+    `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode, s.GuestCount,
             t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
@@ -181,6 +199,7 @@ module.exports = {
   findSessionByJoinCode,
   addParticipant,
   findParticipantByName,
+  getSessionParticipants,
   findSessionById,
   updateSessionStatus,
   updateGuestCount

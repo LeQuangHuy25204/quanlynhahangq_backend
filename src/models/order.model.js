@@ -169,10 +169,11 @@ const cancelOrderLine = async (orderLineId, { cancelledBy, cancelReason }) => {
 const findOrderLinesBySessionId = async (sessionId) => {
   const [rows] = await pool.execute(
     `SELECT ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, ol.Quantity, ol.UnitPrice, ol.LineTotal, ol.Note, ol.Status,
-            o.OrderID, o.Status AS OrderStatus, mi.IsWeightBased
+            o.OrderID, o.Status AS OrderStatus, mi.IsWeightBased, sp.GuestName
      FROM orderline ol
      INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
      INNER JOIN \`order\` o ON ol.OrderID = o.OrderID
+     LEFT JOIN sessionparticipant sp ON o.ParticipantID = sp.ParticipantID
      WHERE o.SessionID = ?
      ORDER BY o.CreatedAt DESC, ol.OrderLineID ASC`,
     [sessionId]
