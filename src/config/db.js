@@ -30,11 +30,12 @@ const testConnection = async () => {
     const conn = await pool.getConnection();
     console.log('[DB] ✅ Kết nối MySQL thành công!');
     const [tables] = await conn.query(
-      `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'branch'`
+      `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND LOWER(table_name) = 'branch'`
     );
     conn.release();
 
-    if (tables[0].cnt === 0) {
+    const tableCount = Number(tables[0]?.cnt ?? tables[0]?.CNT ?? 0);
+    if (tableCount === 0) {
       const seedPath = path.join(__dirname, '../../sql/cloud_seed.sql');
       if (fs.existsSync(seedPath)) {
         console.log('[DB] 🌱 Phát hiện Database trống trên Cloud, đang nạp dữ liệu từ sql/cloud_seed.sql...');
