@@ -12,7 +12,7 @@ const menuModel = require('../models/menu.model');
  * @param {string|undefined} branchId - Query param từ client
  */
 const getMenu = async (branchId) => {
-  const restaurantId = parseInt(process.env.RESTAURANT_ID, 10);
+  const restaurantId = parseInt(process.env.RESTAURANT_ID || '1', 10);
   if (!restaurantId) {
     const err = new Error('RESTAURANT_ID chưa được cấu hình trong biến môi trường.');
     err.statusCode = 500;

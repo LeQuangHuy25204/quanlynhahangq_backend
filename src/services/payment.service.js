@@ -56,7 +56,7 @@ const computeTotals = async (sessionId, actorUser, promotionId = null) => {
   let promotion = null;
   let discountAmount = 0;
   if (promotionId) {
-    promotion = await promotionModel.findActivePromotion(promotionId, actorUser.restaurantId, session.BranchID);
+    promotion = await promotionModel.findActivePromotion(promotionId, actorUser.restaurantId, branchConfig.BranchID);
     if (!promotion) throw httpError('Mã khuyến mãi không hợp lệ, đã hết hạn hoặc không áp dụng cho chi nhánh này.', 400);
 
     const menuItemIds = promotion.ApplyLevel === 'MENU_ITEM'
