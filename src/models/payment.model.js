@@ -117,13 +117,14 @@ const findInvoiceDetailByPaymentId = async (paymentId) => {
             b.Name AS BranchName, b.Address AS BranchAddress, b.Phone AS BranchPhone,
             b.VATRate, b.ServiceFeeRate,
             t.Name AS TableName, a.Name AS AreaName,
+            s.GuestCount, s.StartTime AS SessionStartTime, s.EndTime AS SessionEndTime,
             pr.Name AS PromotionName
      FROM payment p
      INNER JOIN invoice i ON p.InvoiceID = i.InvoiceID
      INNER JOIN branch b  ON i.BranchID  = b.BranchID
-     INNER JOIN session s ON i.SessionID = s.SessionID
-     INNER JOIN \`table\` t ON s.TableID = t.TableID
-     INNER JOIN area a    ON t.AreaID    = a.AreaID
+     LEFT JOIN session s ON i.SessionID = s.SessionID
+     LEFT JOIN \`table\` t ON s.TableID = t.TableID
+     LEFT JOIN area a    ON t.AreaID    = a.AreaID
      LEFT JOIN promotion pr ON i.PromotionID = pr.PromotionID
      WHERE p.PaymentID = ?`,
     [paymentId]
@@ -133,10 +134,16 @@ const findInvoiceDetailByPaymentId = async (paymentId) => {
 
 const findInvoiceLines = async (invoiceId) => {
   const [rows] = await pool.execute(
-    `SELECT InvoiceLineID, OrderLineID, ItemNameSnapshot AS MenuItemName, Quantity, UnitPrice, Amount
-     FROM invoiceline
-     WHERE InvoiceID = ?
-     ORDER BY InvoiceLineID ASC`,
+    `SELECT il.InvoiceLineID, il.OrderLineID, il.ItemNameSnapshot AS MenuItemName,
+            il.Quantity, il.UnitPrice, il.Amount,
+            COALESCE(mi.Unit, 'Phần') AS Unit,
+            ol.Note,
+            COALESCE(ol.DiscountApplied, 0) AS DiscountApplied
+     FROM invoiceline il
+     LEFT JOIN orderline ol ON il.OrderLineID = ol.OrderLineID
+     LEFT JOIN menuitem mi  ON ol.MenuItemID  = mi.MenuItemID
+     WHERE il.InvoiceID = ?
+     ORDER BY il.InvoiceLineID ASC`,
     [invoiceId]
   );
   return rows;

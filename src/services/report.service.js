@@ -5,8 +5,9 @@ const staffModel  = require('../models/staff.model');
 const { ROLE_CODE } = require('../constants/status');
 
 const validateDateRange = (startDate, endDate) => {
-  if (!startDate || !endDate) {
-    const err = new Error('startDate và endDate là bắt buộc (định dạng YYYY-MM-DD).');
+  if (!startDate && !endDate) return;
+  if ((startDate && !endDate) || (!startDate && endDate)) {
+    const err = new Error('Vui lòng truyền cả startDate và endDate (định dạng YYYY-MM-DD).');
     err.statusCode = 400; throw err;
   }
   if (new Date(startDate) > new Date(endDate)) {
@@ -34,13 +35,14 @@ const getBranchRevenue = async ({ branchId, startDate, endDate }, actorUser) => 
   }
 
   const restaurantId = actorUser.restaurantId || 1;
-  const isSingleDay = startDate === endDate;
+  const isSingleDay = Boolean(startDate && endDate && startDate === endDate);
 
-  const [daily, topItems, summary, hourly] = await Promise.all([
+  const [daily, topItems, summary, hourly, invoices] = await Promise.all([
     reportModel.getRevenueByBranch(restaurantId, targetBranch, startDate, endDate),
     reportModel.getTopSellingItems(restaurantId, targetBranch, startDate, endDate, 10),
     reportModel.getDashboardSummary(restaurantId, targetBranch, startDate, endDate),
-    isSingleDay ? reportModel.getRevenueByHourly(restaurantId, targetBranch, startDate) : Promise.resolve([])
+    isSingleDay ? reportModel.getRevenueByHourly(restaurantId, targetBranch, startDate) : Promise.resolve([]),
+    reportModel.getInvoicesByPeriod(restaurantId, targetBranch, startDate, endDate)
   ]);
 
   return {
@@ -48,11 +50,18 @@ const getBranchRevenue = async ({ branchId, startDate, endDate }, actorUser) => 
     startDate,
     endDate,
     totalRevenue: summary.totalRevenue,
+    subTotal: summary.subTotal,
+    vatAmount: summary.vatAmount,
+    serviceFeeAmount: summary.serviceFeeAmount,
+    discountAmount: summary.discountAmount,
     totalInvoices: summary.totalInvoices,
+    totalGuests: summary.totalGuests,
     avgOrderValue: summary.avgOrderValue,
+    paymentBreakdown: summary.paymentBreakdown,
     daily,
     hourly,
-    topItems
+    topItems,
+    invoices
   };
 };
 

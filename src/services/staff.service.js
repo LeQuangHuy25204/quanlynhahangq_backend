@@ -125,6 +125,13 @@ const toggleStaffStatus = async (staffId, status, actorUser) => {
     throw err;
   }
 
+  // Không cho phép tự khóa tài khoản của chính mình
+  if (Number(staff.StaffID) === Number(actorUser.staffId)) {
+    const err = new Error('Bạn không thể tự khóa hoặc thay đổi trạng thái tài khoản của chính mình.');
+    err.statusCode = 403;
+    throw err;
+  }
+
   // Cách ly nhà hàng
   if (staff.RestaurantID !== actorUser.restaurantId) {
     const err = new Error('Không có quyền thao tác nhân viên ngoài nhà hàng.');
@@ -132,11 +139,18 @@ const toggleStaffStatus = async (staffId, status, actorUser) => {
     throw err;
   }
 
-  // BR-18: BranchManager chỉ quản lý nhân viên chi nhánh mình
-  if (actorUser.roleCode === ROLE_CODE.BRANCH_MANAGER && staff.BranchID !== actorUser.branchId) {
-    const err = new Error('Bạn chỉ có thể quản lý nhân viên của chi nhánh mình.');
-    err.statusCode = 403;
-    throw err;
+  // BR-18 & Phân cấp vai trò: BranchManager chỉ quản lý nhân viên cấp dưới (Waiter, Cashier) trong chi nhánh mình
+  if (actorUser.roleCode === ROLE_CODE.BRANCH_MANAGER) {
+    if (staff.RoleCode === ROLE_CODE.RESTAURANT_ADMIN || staff.RoleCode === ROLE_CODE.BRANCH_MANAGER) {
+      const err = new Error('Quản lý chi nhánh không có quyền khóa hoặc mở khóa tài khoản Quản trị nhà hàng / Quản lý.');
+      err.statusCode = 403;
+      throw err;
+    }
+    if (staff.BranchID !== actorUser.branchId) {
+      const err = new Error('Bạn chỉ có thể quản lý nhân viên của chi nhánh mình.');
+      err.statusCode = 403;
+      throw err;
+    }
   }
 
   if (staff.Status === parsedStatus) {
