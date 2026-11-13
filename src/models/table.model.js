@@ -65,7 +65,13 @@ const findTablesByBranch = async (branchId) => {
        MAX(o.Status) AS OrderStatus
      FROM \`table\` t
      INNER JOIN area a ON t.AreaID = a.AreaID
-     LEFT JOIN session s ON s.TableID = t.TableID AND s.Status IN (0, 1)
+     LEFT JOIN session s ON s.SessionID = (
+       SELECT s2.SessionID
+       FROM session s2
+       WHERE s2.TableID = t.TableID AND s2.Status IN (0, 1)
+       ORDER BY s2.SessionID DESC
+       LIMIT 1
+     )
      LEFT JOIN \`order\` o ON o.SessionID = s.SessionID
      LEFT JOIN orderline ol ON ol.OrderID = o.OrderID AND ol.Status NOT IN (3)
      WHERE a.BranchID = ?

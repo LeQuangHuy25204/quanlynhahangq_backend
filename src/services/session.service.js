@@ -9,6 +9,24 @@ const { SESSION_STATUS, ORDER_STATUS } = require('../constants/status');
 const generateJoinCode = () =>
   crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 6);
 
+// Khóa đồng bộ theo từng bàn để chống race-condition khi 2 request quét QR đến cùng 1 mili-giây
+const tableScanLocks = new Map();
+const withTableLock = async (lockKey, fn) => {
+  const prev = tableScanLocks.get(lockKey) || Promise.resolve();
+  let release;
+  const next = new Promise((resolve) => { release = resolve; });
+  tableScanLocks.set(lockKey, prev.then(() => next));
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (tableScanLocks.get(lockKey) === next) {
+      tableScanLocks.delete(lockKey);
+    }
+  }
+};
+
 /**
  * Xá»­ lÃ½ nghiá»‡p vá»¥ quÃ©t QR má»Ÿ bÃ n.
  *
@@ -46,54 +64,56 @@ const processQRScan = async (qrCode, branchId) => {
     throw err;
   }
 
-  const existingSession = await sessionModel.findActiveSessionByTableId(table.TableID);
-  if (existingSession) {
-    const participants = await sessionModel.getSessionParticipants(existingSession.SessionID);
-    const hasHost = participants.length > 0;
+  return withTableLock(`table_${table.TableID}`, async () => {
+    const existingSession = await sessionModel.findActiveSessionByTableId(table.TableID);
+    if (existingSession) {
+      const participants = await sessionModel.getSessionParticipants(existingSession.SessionID);
+      const hasHost = participants.length > 0;
+
+      return {
+        isNew:            !hasHost,
+        requiresJoinCode: hasHost,
+        participantCount: participants.length,
+        hostName:         hasHost ? participants[0].GuestName : null,
+        sessionId:        existingSession.SessionID,
+        sessionToken:     hasHost ? null : existingSession.SessionToken,
+        joinCode:         hasHost ? null : existingSession.JoinCode,
+        status:           existingSession.Status,
+        table: {
+          tableId:   table.TableID,
+          tableName: table.TableName,
+          areaName:  table.AreaName,
+        },
+      };
+    }
+
+    // Tạo session mới — CHỜ MỞ BÀN
+    const sessionToken = crypto.randomUUID();
+    const joinCode     = generateJoinCode();
+
+    const newSessionId = await sessionModel.createSession({
+      tableId: table.TableID,
+      sessionToken,
+      joinCode,
+      status: SESSION_STATUS.WAITING_OPEN,
+    });
 
     return {
-      isNew:            !hasHost,
-      requiresJoinCode: hasHost,
-      participantCount: participants.length,
-      hostName:         hasHost ? participants[0].GuestName : null,
-      sessionId:        existingSession.SessionID,
-      sessionToken:     hasHost ? null : existingSession.SessionToken,
-      joinCode:         hasHost ? null : existingSession.JoinCode,
-      status:           existingSession.Status,
+      isNew:            true,
+      requiresJoinCode: false,
+      participantCount: 0,
+      hostName:         null,
+      sessionId:        newSessionId,
+      sessionToken,
+      joinCode,
+      status:           SESSION_STATUS.WAITING_OPEN,
       table: {
         tableId:   table.TableID,
         tableName: table.TableName,
         areaName:  table.AreaName,
       },
     };
-  }
-
-  // Tạo session mới — CHỜ MỞ BÀN
-  const sessionToken = crypto.randomUUID();
-  const joinCode     = generateJoinCode();
-
-  const newSessionId = await sessionModel.createSession({
-    tableId: table.TableID,
-    sessionToken,
-    joinCode,
-    status: SESSION_STATUS.WAITING_OPEN,
   });
-
-  return {
-    isNew:            true,
-    requiresJoinCode: false,
-    participantCount: 0,
-    hostName:         null,
-    sessionId:        newSessionId,
-    sessionToken,
-    joinCode,
-    status:           SESSION_STATUS.WAITING_OPEN,
-    table: {
-      tableId:   table.TableID,
-      tableName: table.TableName,
-      areaName:  table.AreaName,
-    },
-  };
 };
 
 /**

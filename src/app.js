@@ -1,5 +1,7 @@
 'use strict';
 
+const path    = require('path');
+const fs      = require('fs');
 const express = require('express');
 const cors    = require('cors');
 const helmet  = require('helmet');
@@ -19,7 +21,10 @@ const branchRoutes   = require('./routes/branch.routes');
 const app = express();
 
 // ── Global Middlewares ────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: false,
+}));
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -43,6 +48,19 @@ app.use('/api/tables',   tableRoutes);
 app.use('/api/promotions', promotionRoutes);
 app.use('/api/reports',  reportRoutes);
 app.use('/api/branches', branchRoutes);
+
+// ── Serve Frontend Static SPA (Production / Cloud) ────────────
+const publicDir = path.join(__dirname, '../public');
+const indexHtml = path.join(publicDir, 'index.html');
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+  app.get(/^(?!\/api|\/health).*/, (_req, res, next) => {
+    if (fs.existsSync(indexHtml)) {
+      return res.sendFile(indexHtml);
+    }
+    return next();
+  });
+}
 
 // ── 404 Handler ───────────────────────────────────────────────
 app.use((req, res) => {
