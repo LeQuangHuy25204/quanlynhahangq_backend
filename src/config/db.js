@@ -22,6 +22,10 @@ const dbConfig = {
 
 const pool = mysql.createPool(dbConfig);
 
+pool.on('connection', (conn) => {
+  conn.query("SET SESSION sql_mode=(SELECT REPLACE(@@sql_mode,'ONLY_FULL_GROUP_BY',''))");
+});
+
 /**
  * Kiểm tra kết nối khi khởi động và tự động khởi tạo schema + seed data nếu DB Cloud mới tạo còn trống.
  */

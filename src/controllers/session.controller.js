@@ -61,7 +61,8 @@ const manualOpenSession = async (req, res, next) => {
 const getSessionById = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
-    const session = await sessionService.getSessionById(sessionId);
+    const { participantId } = req.query;
+    const session = await sessionService.getSessionById(sessionId, participantId);
     if (!session) {
       return res.status(404).json({ success: false, message: 'Phiên không tồn tại.' });
     }

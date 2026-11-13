@@ -32,7 +32,7 @@ const getRevenueByBranch = async (restaurantId, branchId, startDate, endDate) =>
     sql += ' AND i.BranchID = ?';
     params.push(branchId);
   }
-  sql += ' GROUP BY DATE(i.InvoiceDate) ORDER BY DATE(i.InvoiceDate) ASC';
+  sql += " GROUP BY DATE_FORMAT(i.InvoiceDate, '%Y-%m-%d') ORDER BY Date ASC";
   const [rows] = await pool.execute(sql, params);
   return rows;
 };
@@ -89,10 +89,10 @@ const getTopSellingItems = async (restaurantId, branchId, startDate, endDate, li
     sql += ' AND a.BranchID = ?';
     params.push(branchId);
   }
+  const safeLimit = Math.max(1, parseInt(limit, 10) || 10);
   sql += ` GROUP BY mi.MenuItemID, mi.Name, mi.Unit
      ORDER BY TotalQuantity DESC
-     LIMIT ?`;
-  params.push(limit);
+     LIMIT ${safeLimit}`;
   const [rows] = await pool.execute(sql, params);
   return rows;
 };

@@ -329,16 +329,28 @@ const manualOpenSession = async (tableId, guestCount, actorUser) => {
 
 /**
  * Lấy thông tin phiên theo SessionID (kèm số lượng & danh sách người tham gia).
+ * Bảo mật: Không bao giờ lộ SessionToken; chỉ trả JoinCode nếu participantId hợp lệ thuộc phiên này.
  */
-const getSessionById = async (sessionId) => {
+const getSessionById = async (sessionId, participantId = null) => {
   const session = await sessionModel.findSessionById(sessionId);
   if (!session) return null;
 
   const participants = await sessionModel.getSessionParticipants(sessionId);
+  const parsedParticipantId = participantId ? parseInt(participantId, 10) : null;
+  const isVerifiedParticipant = parsedParticipantId
+    ? participants.some((p) => Number(p.ParticipantID) === parsedParticipantId)
+    : false;
+
   return {
-    ...session,
+    SessionID:        session.SessionID,
+    TableID:          session.TableID,
+    TableName:        session.TableName,
+    BranchID:         session.BranchID,
+    Status:           session.Status,
+    GuestCount:       session.GuestCount,
+    JoinCode:         isVerifiedParticipant ? session.JoinCode : null,
     participantCount: participants.length,
-    hostName: participants.length > 0 ? participants[0].GuestName : null,
+    hostName:         participants.length > 0 ? participants[0].GuestName : null,
     participants,
   };
 };
