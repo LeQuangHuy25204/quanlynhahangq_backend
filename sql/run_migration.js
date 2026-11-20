@@ -6,12 +6,16 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 
 const runMigration = async () => {
-  const migrationFile = path.join(__dirname, 'migrations', '001_vnpay_payment_transaction.sql');
-  if (!fs.existsSync(migrationFile)) {
-    throw new Error(`Không tìm thấy file migration: ${migrationFile}`);
+  const migrationsDir = path.join(__dirname, 'migrations');
+  if (!fs.existsSync(migrationsDir)) {
+    throw new Error(`Không tìm thấy thư mục migrations: ${migrationsDir}`);
   }
 
-  const sql = fs.readFileSync(migrationFile, 'utf8');
+  const files = fs
+    .readdirSync(migrationsDir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
   const conn = await mysql.createConnection({
     host: process.env.DB_HOST || process.env.MYSQLHOST || 'localhost',
     port: parseInt(process.env.DB_PORT || process.env.MYSQLPORT || '3306', 10),
@@ -23,9 +27,12 @@ const runMigration = async () => {
   });
 
   try {
-    console.log('[MIGRATION] Đang kiểm tra & chạy 001_vnpay_payment_transaction.sql...');
-    await conn.query(sql);
-    console.log('[MIGRATION] ✅ Hoàn tất migration 001_vnpay_payment_transaction.sql!');
+    for (const file of files) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+      console.log(`[MIGRATION] Đang kiểm tra & chạy ${file}...`);
+      await conn.query(sql);
+      console.log(`[MIGRATION] ✅ Hoàn tất ${file}!`);
+    }
   } finally {
     await conn.end();
   }

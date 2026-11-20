@@ -37,14 +37,25 @@ const getMenu = async (branchId) => {
         items:        [],
       };
     }
+    const stockQty = item.StockQuantity !== null && item.StockQuantity !== undefined ? parseFloat(item.StockQuantity) : null;
+    const lowThresh = item.LowStockThreshold !== null && item.LowStockThreshold !== undefined ? parseFloat(item.LowStockThreshold) : 5;
+    const isOutOfStock = item.IsAvailable === 0 || (stockQty !== null && stockQty <= 0);
+    const isLowStock = !isOutOfStock && stockQty !== null && stockQty > 0 && stockQty <= lowThresh;
+
     acc[item.CategoryID].items.push({
       menuItemId:        item.MenuItemID,
       name:              item.Name,
       description:       item.Description,
       imageUrl:          item.url_Image,
+      unit:              item.Unit || 'Phần',
       isWeightBased:     item.IsWeightBased === 1,
       finalPrice:        parseFloat(item.FinalPrice),
       hasBranchOverride: item.HasBranchOverride === 1,
+      stockQuantity:     stockQty,
+      lowStockThreshold: lowThresh,
+      isAvailable:       !isOutOfStock,
+      isOutOfStock,
+      isLowStock,
     });
     return acc;
   }, {});
@@ -104,12 +115,32 @@ const addMenuItem = async (data, actorUser) => {
  *           RestaurantAdmin có thể chỉ định branchId cụ thể qua body.
  */
 const setBranchOverride = async (menuItemId, data, actorUser) => {
-  const { overridePrice, isAvailable } = data;
+  const { overridePrice, isAvailable, stockQuantity, lowStockThreshold } = data;
 
   if (overridePrice != null && parseFloat(overridePrice) < 0) {
     const err = new Error('overridePrice không được âm.');
     err.statusCode = 400;
     throw err;
+  }
+
+  let parsedStock = null;
+  if (stockQuantity !== undefined && stockQuantity !== null && stockQuantity !== '') {
+    parsedStock = parseFloat(stockQuantity);
+    if (isNaN(parsedStock) || parsedStock < 0) {
+      const err = new Error('Số lượng tồn kho không được âm.');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  let parsedThreshold = 5;
+  if (lowStockThreshold !== undefined && lowStockThreshold !== null && lowStockThreshold !== '') {
+    parsedThreshold = parseFloat(lowStockThreshold);
+    if (isNaN(parsedThreshold) || parsedThreshold < 0) {
+      const err = new Error('Mốc cảnh báo sắp hết hàng không được âm.');
+      err.statusCode = 400;
+      throw err;
+    }
   }
 
   const { ROLE_CODE } = require('../constants/status');
@@ -127,10 +158,12 @@ const setBranchOverride = async (menuItemId, data, actorUser) => {
   }
 
   await menuModel.upsertBranchOverride({
-    branchId:      targetBranchId,
-    menuItemId:    parseInt(menuItemId, 10),
-    overridePrice: overridePrice != null ? parseFloat(overridePrice) : null,
-    isAvailable:   isAvailable !== undefined ? !!isAvailable : true,
+    branchId:          targetBranchId,
+    menuItemId:        parseInt(menuItemId, 10),
+    overridePrice:     overridePrice != null ? parseFloat(overridePrice) : null,
+    isAvailable:       isAvailable !== undefined ? !!isAvailable : true,
+    stockQuantity:     parsedStock,
+    lowStockThreshold: parsedThreshold,
   });
 
   return { menuItemId: parseInt(menuItemId, 10), branchId: targetBranchId };
@@ -166,6 +199,10 @@ const getAdminMenu = async (branchId, actorUser) => {
       isWeightBased:       r.IsWeightBased === 1,
       isActive:            r.IsActive === 1,
       branchAvailable:     r.BranchAvailable === 1,
+      stockQuantity:       r.StockQuantity !== null && r.StockQuantity !== undefined ? parseFloat(r.StockQuantity) : null,
+      lowStockThreshold:   r.LowStockThreshold !== null && r.LowStockThreshold !== undefined ? parseFloat(r.LowStockThreshold) : 5,
+      isOutOfStock:        r.StockQuantity !== null && parseFloat(r.StockQuantity) <= 0,
+      isLowStock:          r.StockQuantity !== null && parseFloat(r.StockQuantity) > 0 && parseFloat(r.StockQuantity) <= parseFloat(r.LowStockThreshold ?? 5),
     })),
   };
 };

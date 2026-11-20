@@ -1,5 +1,6 @@
 'use strict';
 
+const { pool }   = require('../config/db');
 const orderModel   = require('../models/order.model');
 const menuModel    = require('../models/menu.model');
 const sessionModel = require('../models/session.model');
@@ -73,8 +74,15 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
       continue;
     }
     if (!menuItem.IsAvailable) {
-      errors.push(`Món "${menuItem.Name}" hiện không khả dụng tại chi nhánh này.`);
+      errors.push(`Món "${menuItem.Name}" hiện đã hết hàng hoặc tạm ngưng phục vụ tại chi nhánh này.`);
       continue;
+    }
+    if (menuItem.StockQuantity !== null && menuItem.StockQuantity !== undefined) {
+      const availQty = parseFloat(menuItem.StockQuantity);
+      if (parseFloat(quantity) > availQty) {
+        errors.push(`Món "${menuItem.Name}" chỉ còn ${availQty} ${menuItem.Unit || 'phần'}, không đủ số lượng bạn đặt.`);
+        continue;
+      }
     }
 
     // Xác định trạng thái theo loại món (Món cân = CHỜ CÂN)
@@ -86,6 +94,7 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
 
     orderLinesData.push({
       menuItemId,
+      menuItemName: menuItem.Name,
       quantity: finalQuantity,
       unitPrice: parseFloat(menuItem.FinalPrice), // ← SNAPSHOT GIÁ (BR-07)
       note,
@@ -107,25 +116,45 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
     throw err;
   }
 
-  // ── Tạo hoặc Lấy Order đang mở ────────────────────────────
-  let activeOrder = await orderModel.findActiveOrderByParticipantId(
-    session.SessionID,
-    parseInt(participantId, 10)
-  );
-
+  // ── Trừ tồn kho nguyên tử + Tạo OrderLines trong DB Transaction ──
+  const conn = await pool.getConnection();
   let orderIdToUse;
-  if (activeOrder) {
-    orderIdToUse = activeOrder.OrderID;
-  } else {
-    const { orderId } = await orderModel.createOrder({
-      sessionId:     session.SessionID,
-      participantId: parseInt(participantId, 10),
-      status:        ORDER_STATUS.PENDING,
-    });
-    orderIdToUse = orderId;
-  }
+  try {
+    await conn.beginTransaction();
 
-  await orderModel.createOrderLines(orderIdToUse, orderLinesData);
+    for (const line of orderLinesData) {
+      const stockRes = await menuModel.deductBranchStock(branchId, line.menuItemId, line.quantity, conn);
+      if (!stockRes.ok) {
+        const err = new Error(`Món "${line.menuItemName}" vừa hết hàng hoặc không đủ số lượng còn lại.`);
+        err.statusCode = 409;
+        throw err;
+      }
+    }
+
+    const activeOrder = await orderModel.findActiveOrderByParticipantId(
+      session.SessionID,
+      parseInt(participantId, 10)
+    );
+
+    if (activeOrder) {
+      orderIdToUse = activeOrder.OrderID;
+    } else {
+      const { orderId } = await orderModel.createOrder({
+        sessionId:     session.SessionID,
+        participantId: parseInt(participantId, 10),
+        status:        ORDER_STATUS.PENDING,
+      }, conn);
+      orderIdToUse = orderId;
+    }
+
+    await orderModel.createOrderLines(orderIdToUse, orderLinesData, conn);
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 
   const finalOrder = await orderModel.findOrderWithLines(orderIdToUse);
 
@@ -178,9 +207,16 @@ const updateOrderLineWeight = async (orderLineId, weight, actorUser) => {
     throw err;
   }
 
-  // Cập nhật Database
+  // Cập nhật Database + điều chỉnh chênh lệch tồn kho (nếu món cân có quản lý tồn kho)
   const newStatus = ORDER_LINE_STATUS.COOKING;
-  await orderModel.updateOrderLineQuantityAndStatus(orderLineId, parseFloat(weight), newStatus);
+  const newWeight = parseFloat(weight);
+  const oldQty = parseFloat(orderLine.Quantity || 0);
+  const delta = oldQty - newWeight; // > 0: cân nhẹ hơn -> hoàn lại; < 0: cân nặng hơn -> trừ thêm
+
+  await orderModel.updateOrderLineQuantityAndStatus(orderLineId, newWeight, newStatus);
+  if (delta !== 0 && orderLine.BranchID) {
+    await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, delta);
+  }
 
   // [GIẢ LẬP] Gọi hàm in phiếu bếp
   console.log(`[PRINT_KITCHEN_TICKET] In phiếu bếp cho OrderLineID: ${orderLineId}, Khối lượng: ${weight}`);
@@ -287,6 +323,7 @@ const prepareSessionForPayment = async (sessionId, actorUser = null) => {
       cancelledBy: actorUser?.staffId ?? null,
       cancelReason: 'Món chưa xác nhận khi yêu cầu thanh toán',
     });
+    await menuModel.adjustBranchStock(session.BranchID, line.MenuItemID, parseFloat(line.Quantity || 0));
   }
   return { cancelledCount: unconfirmed.length };
 };
@@ -377,6 +414,9 @@ const cancelOrderLine = async (orderLineId, cancelReason, actorUser) => {
     cancelledBy: actorUser.staffId,
     cancelReason,
   });
+  if (orderLine.BranchID) {
+    await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, parseFloat(orderLine.Quantity || 0));
+  }
 
   return { orderLineId, status: ORDER_LINE_STATUS.CANCELLED, message: 'Đã hủy món thành công.' };
 };

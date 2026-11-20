@@ -92,6 +92,8 @@ CREATE TABLE `branchmenuoverride` (
   `MenuItemID` bigint(20) NOT NULL,
   `OverridePrice` decimal(18,2) DEFAULT NULL,
   `IsAvailable` tinyint(4) NOT NULL DEFAULT 1,
+  `StockQuantity` decimal(10,3) DEFAULT NULL COMMENT 'NULL: không giới hạn; >=0: số lượng còn tại chi nhánh',
+  `LowStockThreshold` decimal(10,3) NOT NULL DEFAULT 5.000 COMMENT 'Mốc cảnh báo sắp hết hàng',
   `StartDate` datetime DEFAULT NULL,
   `EndDate` datetime DEFAULT NULL,
   PRIMARY KEY (`BranchMenuOverrideID`),

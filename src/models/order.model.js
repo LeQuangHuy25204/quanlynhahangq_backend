@@ -6,13 +6,18 @@ const { pool } = require('../config/db');
  * Tạo Order record.
  * OrderNumber tự sinh theo pattern: ORD-{YYYYMMDD}-{random 6 hex}
  */
-const createOrder = async ({ sessionId, participantId, status, createdByStaffId = null }) => {
-  const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+const createOrder = async ({ sessionId, participantId, status, createdByStaffId = null }, conn = pool) => {
+  const vnDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const dateStr = vnDate.replace(/-/g, '');
   const random = Math.floor(Math.random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0');
   const orderNumber = `ORD-${dateStr}-${random}`;
 
-  const [result] = await pool.execute(
+  const [result] = await conn.execute(
     `INSERT INTO \`order\` (SessionID, ParticipantID, OrderNumber, Status, CreatedByStaffID)
      VALUES (?, ?, ?, ?, ?)`,
     [sessionId, participantId, orderNumber, status, createdByStaffId]
@@ -22,14 +27,8 @@ const createOrder = async ({ sessionId, participantId, status, createdByStaffId 
 
 /**
  * Batch insert OrderLines với UnitPrice đã được snapshot (BR-07).
- *
- * QUAN TRỌNG: UnitPrice được truyền vào từ service layer (đã lấy giá hiện tại)
- * và lưu trực tiếp. Model KHÔNG query ngược lại bảng menu để tính giá.
- *
- * @param {number}   orderId
- * @param {Array}    lines - [{ menuItemId, quantity, unitPrice, note, status }]
  */
-const createOrderLines = async (orderId, lines) => {
+const createOrderLines = async (orderId, lines, conn = pool) => {
   if (!lines || lines.length === 0) return [];
 
   const placeholders = lines.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, 0.00)').join(', ');
@@ -37,7 +36,7 @@ const createOrderLines = async (orderId, lines) => {
     orderId, menuItemId, promotionId || null, quantity, unitPrice, quantity * unitPrice, note || null, status,
   ]);
 
-  await pool.execute(
+  await conn.execute(
     `INSERT INTO orderline (OrderID, MenuItemID, PromotionID, Quantity, UnitPrice, LineTotal, Note, Status, DiscountApplied)
      VALUES ${placeholders}`,
     values
@@ -74,11 +73,16 @@ const findOrderWithLines = async (orderId) => {
 /**
  * Tìm 1 OrderLine bằng ID.
  */
-const findOrderLineById = async (orderLineId) => {
-  const [rows] = await pool.execute(
-    `SELECT OrderLineID, OrderID, MenuItemID, PromotionID, Quantity, UnitPrice, LineTotal, Note, Status, DiscountApplied
-     FROM orderline
-     WHERE OrderLineID = ?`,
+const findOrderLineById = async (orderLineId, conn = pool) => {
+  const [rows] = await conn.execute(
+    `SELECT ol.OrderLineID, ol.OrderID, ol.MenuItemID, ol.PromotionID, ol.Quantity, ol.UnitPrice,
+            ol.LineTotal, ol.Note, ol.Status, ol.DiscountApplied, a.BranchID
+     FROM orderline ol
+     INNER JOIN \`order\` o ON ol.OrderID = o.OrderID
+     INNER JOIN session s ON o.SessionID = s.SessionID
+     INNER JOIN \`table\` t ON s.TableID = t.TableID
+     INNER JOIN area a ON t.AreaID = a.AreaID
+     WHERE ol.OrderLineID = ?`,
     [orderLineId]
   );
   return rows[0] || null;
@@ -153,8 +157,8 @@ const updateAllOrdersStatusInSession = async (sessionId, status) => {
 /**
  * Hủy một dòng món (ghi lý do và người hủy).
  */
-const cancelOrderLine = async (orderLineId, { cancelledBy, cancelReason }) => {
-  const [result] = await pool.execute(
+const cancelOrderLine = async (orderLineId, { cancelledBy, cancelReason }, conn = pool) => {
+  const [result] = await conn.execute(
     `UPDATE orderline
      SET Status = 3, CancelledAt = NOW(), CancelledBy = ?, CancelReason = ?
      WHERE OrderLineID = ?`,

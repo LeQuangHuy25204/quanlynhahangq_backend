@@ -20,11 +20,19 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
          mi.Name,
          mi.Description,
          mi.url_Image,
+         mi.Unit,
          mi.IsWeightBased,
          mi.CategoryID,
          c.Name                                   AS CategoryName,
          COALESCE(bmo.OverridePrice, mi.BasePrice) AS FinalPrice,
-         CASE WHEN bmo.BranchMenuOverrideID IS NOT NULL THEN 1 ELSE 0 END AS HasBranchOverride
+         CASE WHEN bmo.BranchMenuOverrideID IS NOT NULL THEN 1 ELSE 0 END AS HasBranchOverride,
+         bmo.StockQuantity,
+         COALESCE(bmo.LowStockThreshold, 5) AS LowStockThreshold,
+         CASE
+           WHEN bmo.IsAvailable = 0 THEN 0
+           WHEN bmo.StockQuantity IS NOT NULL AND bmo.StockQuantity <= 0 THEN 0
+           ELSE 1
+         END AS IsAvailable
        FROM menuitem mi
        INNER JOIN category c ON mi.CategoryID = c.CategoryID
        LEFT JOIN branchmenuoverride bmo
@@ -35,7 +43,6 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
        WHERE mi.IsActive      = 1
          AND mi.RestaurantID  = ?
          AND (mi.BranchID IS NULL OR mi.BranchID = ?)
-         AND (bmo.IsAvailable IS NULL OR bmo.IsAvailable = 1)
        ORDER BY c.Name ASC, mi.Name ASC`,
       [branchId, restaurantId, branchId]
     );
@@ -49,11 +56,15 @@ const findAllMenuItems = async (restaurantId, branchId = null) => {
        mi.Name,
        mi.Description,
        mi.url_Image,
+       mi.Unit,
        mi.IsWeightBased,
        mi.CategoryID,
        c.Name       AS CategoryName,
        mi.BasePrice AS FinalPrice,
-       0            AS HasBranchOverride
+       0            AS HasBranchOverride,
+       NULL         AS StockQuantity,
+       5            AS LowStockThreshold,
+       1            AS IsAvailable
      FROM menuitem mi
      INNER JOIN category c ON mi.CategoryID = c.CategoryID
      WHERE mi.IsActive     = 1
@@ -83,31 +94,112 @@ const createMenuItem = async ({ restaurantId, branchId, categoryId, name, descri
  * Dùng INSERT ... ON DUPLICATE KEY UPDATE để idempotent.
  * BR-21: branchId lấy từ req.user.
  */
-const upsertBranchOverride = async ({ branchId, menuItemId, overridePrice, isAvailable }) => {
+const upsertBranchOverride = async ({ branchId, menuItemId, overridePrice, isAvailable, stockQuantity = null, lowStockThreshold = 5 }) => {
+  const effectiveAvailable = (stockQuantity !== null && Number(stockQuantity) <= 0)
+    ? 0
+    : (isAvailable ? 1 : 0);
+
   const [result] = await pool.execute(
-    `INSERT INTO branchmenuoverride (BranchID, MenuItemID, OverridePrice, IsAvailable)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO branchmenuoverride (BranchID, MenuItemID, OverridePrice, IsAvailable, StockQuantity, LowStockThreshold)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
-       OverridePrice = VALUES(OverridePrice),
-       IsAvailable   = VALUES(IsAvailable)`,
-    [branchId, menuItemId, overridePrice ?? null, isAvailable ? 1 : 0]
+       OverridePrice     = VALUES(OverridePrice),
+       IsAvailable       = VALUES(IsAvailable),
+       StockQuantity     = VALUES(StockQuantity),
+       LowStockThreshold = VALUES(LowStockThreshold)`,
+    [
+      branchId,
+      menuItemId,
+      overridePrice ?? null,
+      effectiveAvailable,
+      stockQuantity !== null && stockQuantity !== undefined ? Number(stockQuantity) : null,
+      lowStockThreshold !== null && lowStockThreshold !== undefined ? Number(lowStockThreshold) : 5,
+    ]
   );
   return result;
+};
+
+/**
+ * Trừ tồn kho nguyên tử khi khách đặt món (chỉ trừ nếu StockQuantity IS NOT NULL).
+ * Tự động khóa món (IsAvailable = 0) nếu tồn kho chạm 0.
+ */
+const deductBranchStock = async (branchId, menuItemId, quantity, conn = pool) => {
+  const [rows] = await conn.execute(
+    `SELECT StockQuantity FROM branchmenuoverride WHERE BranchID = ? AND MenuItemID = ? FOR UPDATE`,
+    [branchId, menuItemId]
+  );
+  if (!rows.length || rows[0].StockQuantity === null) {
+    return { tracked: false, ok: true };
+  }
+
+  const [result] = await conn.execute(
+    `UPDATE branchmenuoverride
+     SET StockQuantity = StockQuantity - ?,
+         IsAvailable   = CASE WHEN StockQuantity - ? <= 0 THEN 0 ELSE IsAvailable END
+     WHERE BranchID = ?
+       AND MenuItemID = ?
+       AND StockQuantity IS NOT NULL
+       AND StockQuantity >= ?`,
+    [quantity, quantity, branchId, menuItemId, quantity]
+  );
+  return { tracked: true, ok: result.affectedRows > 0 };
+};
+
+/**
+ * Điều chỉnh / hoàn trả tồn kho (khi hủy món hoặc cân lại trọng lượng món).
+ * Nếu tồn kho tăng từ <= 0 lên > 0 thì tự động mở lại món (IsAvailable = 1).
+ */
+const adjustBranchStock = async (branchId, menuItemId, delta, conn = pool) => {
+  const [rows] = await conn.execute(
+    `SELECT StockQuantity FROM branchmenuoverride WHERE BranchID = ? AND MenuItemID = ? FOR UPDATE`,
+    [branchId, menuItemId]
+  );
+  if (!rows.length || rows[0].StockQuantity === null) {
+    return { tracked: false, ok: true };
+  }
+
+  if (delta < 0) {
+    const need = Math.abs(delta);
+    const [result] = await conn.execute(
+      `UPDATE branchmenuoverride
+       SET StockQuantity = GREATEST(0, StockQuantity - ?),
+           IsAvailable   = CASE WHEN StockQuantity - ? <= 0 THEN 0 ELSE IsAvailable END
+       WHERE BranchID = ? AND MenuItemID = ? AND StockQuantity IS NOT NULL`,
+      [need, need, branchId, menuItemId]
+    );
+    return { tracked: true, ok: result.affectedRows > 0 };
+  }
+
+  const [result] = await conn.execute(
+    `UPDATE branchmenuoverride
+     SET StockQuantity = StockQuantity + ?,
+         IsAvailable   = CASE WHEN StockQuantity + ? > 0 THEN 1 ELSE 0 END
+     WHERE BranchID = ? AND MenuItemID = ? AND StockQuantity IS NOT NULL`,
+    [delta, delta, branchId, menuItemId]
+  );
+  return { tracked: true, ok: result.affectedRows > 0 };
 };
 
 /**
  * Lấy giá hiện tại của một món cho một chi nhánh.
  * Dùng trong order service để snapshot giá (BR-07).
  */
-const getCurrentPriceForBranch = async (menuItemId, branchId, restaurantId) => {
-  const [rows] = await pool.execute(
+const getCurrentPriceForBranch = async (menuItemId, branchId, restaurantId, conn = pool) => {
+  const [rows] = await conn.execute(
     `SELECT
        mi.MenuItemID,
        mi.Name,
+       mi.Unit,
        mi.IsWeightBased,
        mi.RestaurantID,
        COALESCE(bmo.OverridePrice, mi.BasePrice) AS FinalPrice,
-       CASE WHEN bmo.IsAvailable = 0 THEN 0 ELSE 1 END AS IsAvailable
+       bmo.StockQuantity,
+       COALESCE(bmo.LowStockThreshold, 5) AS LowStockThreshold,
+       CASE
+         WHEN bmo.IsAvailable = 0 THEN 0
+         WHEN bmo.StockQuantity IS NOT NULL AND bmo.StockQuantity <= 0 THEN 0
+         ELSE 1
+       END AS IsAvailable
      FROM menuitem mi
      LEFT JOIN branchmenuoverride bmo
             ON bmo.MenuItemID = mi.MenuItemID
@@ -124,8 +216,7 @@ const getCurrentPriceForBranch = async (menuItemId, branchId, restaurantId) => {
 
 /**
  * Danh sách món cho màn quản trị: gồm cả món ngừng bán (IsActive = 0) và món bị
- * chi nhánh ẩn, kèm giá gốc / giá đè của chi nhánh đang chọn.
- * Hiển thị món toàn chuỗi (BranchID IS NULL) và món riêng của chi nhánh đó (BranchID = branchId).
+ * chi nhánh ẩn, kèm giá gốc / giá đè / tồn kho của chi nhánh đang chọn.
  */
 const findAllMenuItemsForAdmin = async (restaurantId, branchId) => {
   const [rows] = await pool.execute(
@@ -135,7 +226,13 @@ const findAllMenuItemsForAdmin = async (restaurantId, branchId) => {
        mi.Name, mi.Description, mi.url_Image, mi.Unit,
        mi.BasePrice, mi.IsWeightBased, mi.IsActive,
        bmo.OverridePrice,
-       CASE WHEN bmo.BranchMenuOverrideID IS NULL THEN 1 ELSE bmo.IsAvailable END AS BranchAvailable
+       bmo.StockQuantity,
+       COALESCE(bmo.LowStockThreshold, 5) AS LowStockThreshold,
+       CASE
+         WHEN bmo.StockQuantity IS NOT NULL AND bmo.StockQuantity <= 0 THEN 0
+         WHEN bmo.BranchMenuOverrideID IS NULL THEN 1
+         ELSE bmo.IsAvailable
+       END AS BranchAvailable
      FROM menuitem mi
      INNER JOIN category c ON mi.CategoryID = c.CategoryID
      LEFT JOIN branch b ON b.BranchID = mi.BranchID
@@ -203,6 +300,8 @@ module.exports = {
   findAllMenuItems,
   createMenuItem,
   upsertBranchOverride,
+  deductBranchStock,
+  adjustBranchStock,
   getCurrentPriceForBranch,
   findAllMenuItemsForAdmin,
   findCategories,
