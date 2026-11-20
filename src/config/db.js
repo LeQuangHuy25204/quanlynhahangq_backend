@@ -23,6 +23,7 @@ const dbConfig = {
 const pool = mysql.createPool(dbConfig);
 
 pool.on('connection', (conn) => {
+  conn.query("SET time_zone = '+07:00'");
   conn.query("SET SESSION sql_mode=(SELECT REPLACE(@@sql_mode,'ONLY_FULL_GROUP_BY',''))");
 });
 

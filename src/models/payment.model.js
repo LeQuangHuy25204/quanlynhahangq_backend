@@ -35,8 +35,13 @@ const createPayment = async ({ invoiceId, amount, paymentMethod, status, note },
  * InvoiceNumber tự sinh pattern: INV-{YYYYMMDD}-{random 6 hex}
  */
 const createInvoice = async ({ sessionId, branchId, promotionId, subTotal, vatAmount, serviceFeeAmount, discountAmount, totalAmount }, conn = pool) => {
-  const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const vnDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const dateStr = vnDate.replace(/-/g, '');
   const random = Math.floor(Math.random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0');
   const invoiceNumber = `INV-${dateStr}-${random}`;
 
