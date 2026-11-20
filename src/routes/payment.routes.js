@@ -14,6 +14,10 @@ const CASHIER_ROLES = ['Cashier', 'BranchManager', 'RestaurantAdmin'];
  * nếu không có thì cho qua để tầng service kiểm tra sessionToken của khách hàng.
  */
 const optionalStaffAuth = (req, res, next) => {
+  // Nếu request từ khách hàng gửi kèm sessionToken, ưu tiên xác thực theo sessionToken (tránh vướng JWT nhân viên hết hạn trong localStorage)
+  if (req.body?.sessionToken || req.headers['x-session-token']) {
+    return next();
+  }
   const authHeader = req.headers['authorization'];
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return authenticate(req, res, (err) => {

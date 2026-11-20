@@ -438,4 +438,4 @@ const trackOrderByToken = async (sessionToken) => {
   };
 };
 
-module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
+module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, prepareSessionForPayment, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
