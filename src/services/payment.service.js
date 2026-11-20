@@ -30,6 +30,40 @@ const httpError = (message, statusCode) => {
   return err;
 };
 
+/**
+ * Tạo thông tin & URL mã VietQR chuyển khoản trực tiếp vào tài khoản ngân hàng cấu hình.
+ */
+const buildVietQrInfo = ({ amount, invoiceNumber = null, tableName = null, sessionId = null }) => {
+  const bankId = (process.env.VIETQR_BANK_ID || '').trim();
+  const accountNo = (process.env.VIETQR_ACCOUNT_NO || '').trim();
+  const accountName = (process.env.VIETQR_ACCOUNT_NAME || '').trim();
+  if (!bankId || !accountNo) return null;
+
+  const cleanRef = invoiceNumber || `PHIEN ${sessionId || ''}`.trim();
+  const addInfo = `TT ${cleanRef}${tableName ? ` ${tableName}` : ''}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9\s-]/g, '')
+    .trim()
+    .slice(0, 50);
+
+  const roundedAmount = Math.max(0, Math.round(Number(amount || 0)));
+  const params = new URLSearchParams({
+    amount: String(roundedAmount),
+    addInfo,
+    ...(accountName ? { accountName } : {}),
+  });
+
+  return {
+    bankId,
+    accountNo,
+    accountName,
+    addInfo,
+    amount: roundedAmount,
+    qrUrl: `https://img.vietqr.io/image/${encodeURIComponent(bankId)}-${encodeURIComponent(accountNo)}-compact2.png?${params.toString()}`,
+  };
+};
+
 // Khóa đồng bộ theo SessionID để chống double-submit / tạo trùng Invoice khi 2 request đến cùng lúc
 const sessionPaymentLocks = new Map();
 const withSessionPaymentLock = async (sessionId, fn) => {
@@ -140,6 +174,7 @@ const previewCheckout = async (sessionId, actorUser, promotionId = null) => {
     discountAmount: t.discountAmount,
     totalAmount: t.totalAmount,
     promotionName: t.promotion ? t.promotion.Name : null,
+    vietQr: buildVietQrInfo({ amount: t.totalAmount, sessionId }),
   };
 };
 
@@ -196,6 +231,12 @@ const customerPreviewCheckout = async (sessionToken, promotionId = null) => {
       discountAmount: parseFloat(detail.DiscountAmount),
       totalAmount: parseFloat(detail.TotalAmount),
       promotionName: detail.PromotionName || null,
+      vietQr: buildVietQrInfo({
+        amount: parseFloat(detail.TotalAmount),
+        invoiceNumber: detail.InvoiceNumber,
+        tableName: session.TableName,
+        sessionId: session.SessionID,
+      }),
     };
   }
 
@@ -219,6 +260,11 @@ const customerPreviewCheckout = async (sessionToken, promotionId = null) => {
     discountAmount: t.discountAmount,
     totalAmount: t.totalAmount,
     promotionName: t.promotion ? t.promotion.Name : null,
+    vietQr: buildVietQrInfo({
+      amount: t.totalAmount,
+      tableName: session.TableName,
+      sessionId: session.SessionID,
+    }),
   };
 };
 
