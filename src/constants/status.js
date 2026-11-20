@@ -39,6 +39,23 @@ const PAYMENT_STATUS = Object.freeze({
   REFUNDED: 3,
 });
 
+// Payment.PaymentMethod
+const PAYMENT_METHOD = Object.freeze({
+  CASH:          'CASH',
+  BANK_TRANSFER: 'BANK_TRANSFER',
+  CARD:          'CARD',
+  VNPAY:         'VNPAY',
+});
+
+// PaymentTransaction.Status (lịch sử giao dịch cổng thanh toán)
+const VNPAY_TX_STATUS = Object.freeze({
+  PENDING:            'PENDING',
+  SUCCESS:            'SUCCESS',
+  FAILED:             'FAILED',
+  CANCELLED:          'CANCELLED',
+  DUPLICATE_CONFLICT: 'DUPLICATE_CONFLICT',
+});
+
 // Staff.Status
 const STAFF_STATUS = Object.freeze({
   INACTIVE: 0,
@@ -58,6 +75,8 @@ module.exports = {
   ORDER_STATUS,
   ORDER_LINE_STATUS,
   PAYMENT_STATUS,
+  PAYMENT_METHOD,
+  VNPAY_TX_STATUS,
   STAFF_STATUS,
   ROLE_CODE,
 };

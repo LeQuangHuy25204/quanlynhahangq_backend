@@ -158,8 +158,8 @@ const findSessionById = async (sessionId) => {
  *  HOẶC
  *  2. Bàn chưa có order hay món nào (hoặc tất cả món đã bị hủy) -> được phép đóng ngay.
  */
-const updateSessionStatus = async (sessionId, status) => {
-  const [result] = await pool.execute(
+const updateSessionStatus = async (sessionId, status, conn = pool) => {
+  const [result] = await conn.execute(
     `UPDATE session SET Status = ?
      WHERE SessionID = ?
        AND (
