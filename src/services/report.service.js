@@ -39,7 +39,7 @@ const getBranchRevenue = async ({ branchId, startDate, endDate }, actorUser) => 
 
   const [daily, topItems, summary, hourly, invoices] = await Promise.all([
     reportModel.getRevenueByBranch(restaurantId, targetBranch, startDate, endDate),
-    reportModel.getTopSellingItems(restaurantId, targetBranch, startDate, endDate, 10),
+    reportModel.getTopSellingItems(restaurantId, targetBranch, startDate, endDate, 50),
     reportModel.getDashboardSummary(restaurantId, targetBranch, startDate, endDate),
     isSingleDay ? reportModel.getRevenueByHourly(restaurantId, targetBranch, startDate) : Promise.resolve([]),
     reportModel.getInvoicesByPeriod(restaurantId, targetBranch, startDate, endDate)

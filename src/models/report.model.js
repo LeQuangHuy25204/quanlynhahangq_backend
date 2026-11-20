@@ -67,31 +67,31 @@ const getRevenueByHourly = async (restaurantId, branchId, date) => {
 const getTopSellingItems = async (restaurantId, branchId, startDate, endDate, limit = 10) => {
   let sql = `SELECT
        mi.MenuItemID,
-       mi.Name        AS MenuItemName,
+       mi.Name           AS MenuItemName,
        mi.Unit,
-       SUM(ol.Quantity) AS TotalQuantity,
+       SUM(ol.Quantity)  AS TotalQuantity,
        SUM(ol.LineTotal) AS TotalRevenue
      FROM orderline ol
      INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
      INNER JOIN \`order\` o  ON ol.OrderID   = o.OrderID
-     INNER JOIN session s   ON o.SessionID  = s.SessionID
-     INNER JOIN \`table\` t  ON s.TableID    = t.TableID
-     INNER JOIN area a      ON t.AreaID     = a.AreaID
-     INNER JOIN branch b    ON a.BranchID   = b.BranchID
+     INNER JOIN invoice i   ON i.SessionID   = o.SessionID
+     INNER JOIN payment p   ON p.InvoiceID   = i.InvoiceID
+     INNER JOIN branch b    ON i.BranchID    = b.BranchID
      WHERE b.RestaurantID = ?
-       AND ol.Status  != 3`;
+       AND p.Status       = 1
+       AND ol.Status     != 3`;
   const params = [restaurantId];
   if (startDate && endDate) {
-    sql += ' AND DATE(ol.CreatedAt) BETWEEN ? AND ?';
+    sql += ' AND DATE(i.InvoiceDate) BETWEEN ? AND ?';
     params.push(startDate, endDate);
   }
   if (branchId) {
-    sql += ' AND a.BranchID = ?';
+    sql += ' AND i.BranchID = ?';
     params.push(branchId);
   }
   const safeLimit = Math.max(1, parseInt(limit, 10) || 10);
   sql += ` GROUP BY mi.MenuItemID, mi.Name, mi.Unit
-     ORDER BY TotalQuantity DESC
+     ORDER BY TotalQuantity DESC, TotalRevenue DESC, mi.MenuItemID ASC
      LIMIT ${safeLimit}`;
   const [rows] = await pool.execute(sql, params);
   return rows;
