@@ -72,9 +72,11 @@ const buildVietQrWithCode = ({ amount, code }) => {
 
   const roundedAmount = Math.max(0, Math.round(Number(amount || 0)));
   const params = new URLSearchParams({
+    acc: accountNo,
+    bank: bankId,
     amount: String(roundedAmount),
-    addInfo: code,
-    ...(accountName ? { accountName } : {}),
+    des: code,
+    template: 'compact',
   });
 
   return {
@@ -83,7 +85,7 @@ const buildVietQrWithCode = ({ amount, code }) => {
     accountName,
     addInfo: code,
     amount: roundedAmount,
-    qrUrl: `https://img.vietqr.io/image/${encodeURIComponent(bankId)}-${encodeURIComponent(accountNo)}-compact2.png?${params.toString()}`,
+    qrUrl: `https://qr.sepay.vn/img?${params.toString()}`,
   };
 };
 
