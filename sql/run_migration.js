@@ -1,46 +1,88 @@
 'use strict';
 
-require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const mysql = require('mysql2/promise');
+const { dbConfig } = require('../src/config/db');
 
-const runMigration = async () => {
-  const migrationsDir = path.join(__dirname, 'migrations');
-  if (!fs.existsSync(migrationsDir)) {
-    throw new Error(`Không tìm thấy thư mục migrations: ${migrationsDir}`);
+const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
+
+const ENSURE_MIGRATIONS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS \`schema_migrations\` (
+    \`MigrationName\` varchar(255) NOT NULL,
+    \`AppliedAt\` datetime NOT NULL DEFAULT current_timestamp(),
+    PRIMARY KEY (\`MigrationName\`)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+`;
+
+/**
+ * Chạy các file SQL chưa được áp dụng trong thư mục migrations theo thứ tự tên file.
+ * Lưu lịch sử vào bảng schema_migrations để tránh chạy lặp seed sau khi admin đã sửa/xóa dữ liệu.
+ */
+const runMigrations = async ({ force = false, createConnection = mysql.createConnection } = {}) => {
+  if (!fs.existsSync(MIGRATIONS_DIR)) {
+    throw new Error(`Không tìm thấy thư mục migrations: ${MIGRATIONS_DIR}`);
   }
 
   const files = fs
-    .readdirSync(migrationsDir)
+    .readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  const conn = await mysql.createConnection({
-    host: process.env.DB_HOST || process.env.MYSQLHOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || process.env.MYSQLPORT || '3306', 10),
-    user: process.env.DB_USER || process.env.MYSQLUSER || 'root',
-    password: process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '',
-    database: process.env.DB_NAME || process.env.MYSQLDATABASE || 'quanlynhahang',
+  if (files.length === 0) {
+    console.log('[MIGRATION] ℹ️ Không có file SQL nào trong thư mục migrations.');
+    return { applied: [], skipped: [] };
+  }
+
+  const conn = await createConnection({
+    ...dbConfig,
     multipleStatements: true,
-    charset: 'utf8mb4',
   });
 
+  const applied = [];
+  const skipped = [];
+
   try {
+    await conn.query(ENSURE_MIGRATIONS_TABLE_SQL);
+    const [rows] = await conn.query('SELECT `MigrationName` FROM `schema_migrations`');
+    const alreadyApplied = new Set(rows.map((r) => r.MigrationName));
+
     for (const file of files) {
-      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+      if (!force && alreadyApplied.has(file)) {
+        skipped.push(file);
+        continue;
+      }
+
+      const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
       console.log(`[MIGRATION] Đang kiểm tra & chạy ${file}...`);
       await conn.query(sql);
+      await conn.query(
+        'INSERT INTO `schema_migrations` (`MigrationName`) VALUES (?) ON DUPLICATE KEY UPDATE `AppliedAt` = CURRENT_TIMESTAMP()',
+        [file]
+      );
+      applied.push(file);
       console.log(`[MIGRATION] ✅ Hoàn tất ${file}!`);
     }
+
+    if (applied.length === 0) {
+      console.log(`[MIGRATION] ✅ Dữ liệu migration đã cập nhật (${skipped.length} file đã áp dụng trước đó).`);
+    }
+
+    return { applied, skipped };
   } finally {
     await conn.end();
   }
 };
 
-runMigration()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error('[MIGRATION] ❌ Lỗi migration:', err.message);
-    process.exit(1);
-  });
+if (require.main === module) {
+  const force = process.argv.includes('--force');
+  runMigrations({ force })
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error('[MIGRATION] ❌ Lỗi migration:', err.message);
+      process.exit(1);
+    });
+}
+
+module.exports = { runMigrations };

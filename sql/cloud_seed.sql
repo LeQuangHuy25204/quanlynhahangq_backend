@@ -441,7 +441,7 @@ CREATE TABLE `promotion` (
   CONSTRAINT `FK_Promotion_Branch` FOREIGN KEY (`BranchID`) REFERENCES `branch` (`BranchID`) ON DELETE CASCADE,
   CONSTRAINT `FK_Promotion_Category` FOREIGN KEY (`TargetCategoryID`) REFERENCES `category` (`CategoryID`),
   CONSTRAINT `FK_Promotion_Restaurant` FOREIGN KEY (`RestaurantID`) REFERENCES `restaurant` (`RestaurantID`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -450,7 +450,7 @@ CREATE TABLE `promotion` (
 
 LOCK TABLES `promotion` WRITE;
 /*!40000 ALTER TABLE `promotion` DISABLE KEYS */;
-INSERT INTO `promotion` VALUES (1,1,NULL,'Khai trương giảm 10%','Giảm trực tiếp 10% tổng bill','INVOICE','PERCENT',10.00,NULL,NULL,NULL,NULL,0,1,'2020-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-10-09 02:46:12','2026-10-09 02:46:12');
+INSERT INTO `promotion` VALUES (1,1,NULL,'Khai trương giảm 10%','Giảm trực tiếp 10% tổng bill','INVOICE','PERCENT',10.00,NULL,NULL,NULL,NULL,0,1,'2020-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-10-09 02:46:12','2026-10-09 02:46:12'),(2,1,1,'Ưu đãi Bò Mỹ Nướng Đá 20%','Giảm 20% khi gọi món Bò Tảng Mỹ nướng đá tại Chi nhánh Quận 1','MENU_ITEM','PERCENT',20.00,NULL,NULL,NULL,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00'),(3,1,1,'Combo Nước Ngọt Giải Nhiệt -10k','Giảm 10.000đ mỗi lon nước ngọt khi gọi từ 2 phần trở lên','MENU_ITEM','FIXED',10000.00,NULL,NULL,2,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00'),(4,1,NULL,'Ưu đãi Mực Lá & Ba Chỉ Nướng 15%','Giảm 15% cho Mực lá khổng lồ và Ba chỉ heo cuộn nấm toàn chuỗi','MENU_ITEM','PERCENT',15.00,NULL,NULL,NULL,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00'),(5,1,1,'Giảm 15% Toàn Bộ Nước Uống','Giảm 15% tất cả món thuộc danh mục Nước uống tại Chi nhánh Quận 1','CATEGORY','PERCENT',15.00,3,NULL,NULL,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00'),(6,1,NULL,'Lễ Hội Thịt Nướng Giảm 12%','Giảm 12% danh mục Thịt nướng khi gọi từ 2 phần trở lên toàn chuỗi','CATEGORY','PERCENT',12.00,1,NULL,2,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00'),(7,1,1,'Tiệc Hải Sản Giảm 30.000đ/món','Giảm 30.000đ mỗi phần Hải sản nướng cho hóa đơn từ 300.000đ','CATEGORY','FIXED',30000.00,2,300000.00,NULL,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00'),(8,1,NULL,'Giảm 50.000đ Hóa Đơn Từ 500k','Trừ trực tiếp 50.000đ cho hóa đơn có tạm tính từ 500.000đ toàn chuỗi','INVOICE','FIXED',50000.00,NULL,500000.00,NULL,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00'),(9,1,1,'Tiệc Nhóm - Giảm 10% Từ 4 Món','Giảm 10% tổng hóa đơn khi bàn gọi từ 4 phần món trở lên tại Q1','INVOICE','PERCENT',10.00,NULL,NULL,4,NULL,0,1,'2026-01-01 00:00:00','2030-12-31 23:59:59',1,'2026-11-25 13:45:00','2026-11-25 13:45:00');
 /*!40000 ALTER TABLE `promotion` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -477,6 +477,7 @@ CREATE TABLE `promotion_menuitem` (
 
 LOCK TABLES `promotion_menuitem` WRITE;
 /*!40000 ALTER TABLE `promotion_menuitem` DISABLE KEYS */;
+INSERT INTO `promotion_menuitem` VALUES (2,1),(2,5),(2,6),(3,4),(3,18),(3,19),(4,2),(4,3);
 /*!40000 ALTER TABLE `promotion_menuitem` ENABLE KEYS */;
 UNLOCK TABLES;
 

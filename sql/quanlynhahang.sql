@@ -404,5 +404,19 @@ INSERT INTO `table` (`TableID`, `AreaID`, `Name`, `QRCode`, `IsActive`) VALUES
 (3, 2, 'Bàn VIP-01', 'table_qr_3', 1),
 (4, 3, 'Bàn V-01', 'table_qr_4', 1);
 
-INSERT INTO `promotion` (`PromotionID`, `RestaurantID`, `BranchID`, `Name`, `Description`, `ApplyLevel`, `DiscountType`, `DiscountValue`, `StartDate`, `EndDate`, `IsActive`) VALUES
-(1, 1, NULL, 'Khai trương giảm 10%', 'Giảm trực tiếp 10% tổng bill', 'INVOICE', 'PERCENT', 10.00, '2020-01-01 00:00:00', '2030-12-31 23:59:59', 1);
+INSERT INTO `promotion` (`PromotionID`, `RestaurantID`, `BranchID`, `Name`, `Description`, `ApplyLevel`, `DiscountType`, `DiscountValue`, `TargetCategoryID`, `MinOrderAmount`, `MinItemCount`, `MaxUsage`, `UsedCount`, `Version`, `StartDate`, `EndDate`, `IsActive`) VALUES
+(1, 1, NULL, 'Khai trương giảm 10%', 'Giảm trực tiếp 10% tổng bill', 'INVOICE', 'PERCENT', 10.00, NULL, NULL, NULL, NULL, 0, 1, '2020-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(2, 1, 1, 'Ưu đãi Bò Mỹ Nướng Đá 20%', 'Giảm 20% khi gọi món Bò Tảng Mỹ nướng đá tại Chi nhánh Quận 1', 'MENU_ITEM', 'PERCENT', 20.00, NULL, NULL, NULL, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(3, 1, 1, 'Combo Nước Ngọt Giải Nhiệt -10k', 'Giảm 10.000đ mỗi lon Coca Cola khi gọi từ 2 phần trở lên', 'MENU_ITEM', 'FIXED', 10000.00, NULL, NULL, 2, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(4, 1, NULL, 'Ưu đãi Mực Lá & Ba Chỉ Nướng 15%', 'Giảm 15% cho Mực lá khổng lồ và Ba chỉ heo cuộn nấm toàn chuỗi', 'MENU_ITEM', 'PERCENT', 15.00, NULL, NULL, NULL, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(5, 1, 1, 'Giảm 15% Toàn Bộ Nước Uống', 'Giảm 15% tất cả món thuộc danh mục Nước uống tại Chi nhánh Quận 1', 'CATEGORY', 'PERCENT', 15.00, 3, NULL, NULL, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(6, 1, NULL, 'Lễ Hội Thịt Nướng Giảm 12%', 'Giảm 12% danh mục Thịt nướng khi gọi từ 2 phần trở lên toàn chuỗi', 'CATEGORY', 'PERCENT', 12.00, 1, NULL, 2, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(7, 1, 1, 'Tiệc Hải Sản Giảm 30.000đ/món', 'Giảm 30.000đ mỗi phần Hải sản nướng cho hóa đơn từ 300.000đ', 'CATEGORY', 'FIXED', 30000.00, 2, 300000.00, NULL, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(8, 1, NULL, 'Giảm 50.000đ Hóa Đơn Từ 500k', 'Trừ trực tiếp 50.000đ cho hóa đơn có tạm tính từ 500.000đ toàn chuỗi', 'INVOICE', 'FIXED', 50000.00, NULL, 500000.00, NULL, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1),
+(9, 1, 1, 'Tiệc Nhóm - Giảm 10% Từ 4 Món', 'Giảm 10% tổng hóa đơn khi bàn gọi từ 4 phần món trở lên tại Q1', 'INVOICE', 'PERCENT', 10.00, NULL, NULL, 4, NULL, 0, 1, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 1);
+
+INSERT INTO `promotion_menuitem` (`PromotionID`, `MenuItemID`) VALUES
+(2, 1),
+(3, 4),
+(4, 2),
+(4, 3);
