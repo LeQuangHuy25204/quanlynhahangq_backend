@@ -56,26 +56,26 @@ router.get('/tracking/:sessionToken', orderController.trackOrderByToken);
 /**
  * @route   PUT /api/orders/lines/:orderLineId/weight
  * @desc    Phục vụ cân món và chuyển sang bếp (FR-SRV-05)
- * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
  * @body    { quantity: number }
  */
 router.put(
   '/lines/:orderLineId/weight',
   authenticate,
-  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
   orderController.updateOrderLineWeight
 );
 
 /**
  * @route   PUT /api/orders/lines/:orderLineId/status
  * @desc    Cập nhật trạng thái món ăn (Chờ xác nhận -> Đã xác nhận -> Đang chế biến -> Đã phục vụ...)
- * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
  * @body    { status: number }
  */
 router.put(
   '/lines/:orderLineId/status',
   authenticate,
-  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
   orderController.updateOrderLineStatus
 );
 
@@ -95,15 +95,48 @@ router.post('/:orderId/request-payment', orderController.requestPayment);
 router.post('/:orderId/staff-request-payment', authenticate, requireRole('Waiter', 'BranchManager', 'RestaurantAdmin', 'Cashier'), orderController.staffRequestPayment);
 
 /**
+ * @route   POST /api/orders/lines/:orderLineId/request-cancel
+ * @desc    Khách hàng gửi yêu cầu hủy món từ màn hình Món đã gọi (chỉ trước khi Đang chế biến)
+ * @access  Public (cần sessionToken)
+ * @body    { sessionToken: string, cancelReason?: string }
+ */
+router.post('/lines/:orderLineId/request-cancel', orderController.customerRequestCancelLine);
+
+/**
+ * @route   POST /api/orders/lines/:orderLineId/staff-request-cancel
+ * @desc    Nhân viên / Thu ngân gửi yêu cầu lên Quản lý chi nhánh / Quản lý nhà hàng để duyệt hủy món đang chế biến trở về sau
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
+ * @body    { cancelReason: string }
+ */
+router.post(
+  '/lines/:orderLineId/staff-request-cancel',
+  authenticate,
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
+  orderController.staffRequestManagerCancelLine
+);
+
+/**
+ * @route   PATCH /api/orders/lines/:orderLineId/reject-cancel
+ * @desc    Nhân viên từ chối yêu cầu hủy món của khách
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
+ */
+router.patch(
+  '/lines/:orderLineId/reject-cancel',
+  authenticate,
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
+  orderController.rejectCancelRequestLine
+);
+
+/**
  * @route   PATCH /api/orders/lines/:orderLineId/cancel
- * @desc    Phục vụ hủy món ăn
- * @access  Protected (Waiter, BranchManager, RestaurantAdmin)
+ * @desc    Phục vụ / Thu ngân / Quản lý hủy món ăn
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
  * @body    { cancelReason?: string }
  */
 router.patch(
   '/lines/:orderLineId/cancel',
   authenticate,
-  requireRole('Waiter', 'BranchManager', 'RestaurantAdmin'),
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
   orderController.cancelOrderLine
 );
 

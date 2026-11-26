@@ -2,6 +2,7 @@
 
 const { pool } = require('../config/db');
 const crypto = require('crypto');
+const sessionModel = require('./session.model');
 
 // ─── AREA ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,8 @@ const findTablesByBranch = async (branchId) => {
        s.StartTime   AS SessionStartTime,
        -- Order total amount
        COALESCE(SUM(ol.LineTotal - ol.DiscountApplied), 0) AS SessionTotalAmount,
+       -- Số lượng món khách đang gửi yêu cầu hủy tại bàn
+       COALESCE(SUM(CASE WHEN ol.CancelReason LIKE '[YC_HUY]%' THEN 1 ELSE 0 END), 0) AS CancelRequestCount,
        -- Order status
        MAX(o.Status) AS OrderStatus
      FROM \`table\` t
@@ -82,22 +85,28 @@ const findTablesByBranch = async (branchId) => {
   );
 
   // Reshape to { TableID, Name, AreaName, Session: {...} | null }
-  return rows.map(r => ({
-    TableID:  r.TableID,
-    Name:     r.Name,
-    QRCode:   r.QRCode,
-    IsActive: r.IsActive,
-    AreaID:   r.AreaID,
-    AreaName: r.AreaName,
-    Session:  r.SessionID ? {
-      SessionID:   r.SessionID,
-      Status:      r.SessionStatus,
-      GuestCount:  r.SessionGuestCount,
-      StartTime:   r.SessionStartTime,
-      TotalAmount: parseFloat(r.SessionTotalAmount) || 0,
-      Order:       r.OrderStatus !== null ? { Status: r.OrderStatus } : null,
-    } : null,
-  }));
+  return rows.map(r => {
+    const ramSupport = r.SessionID ? sessionModel.getSupportRequest(r.SessionID) : null;
+    return {
+      TableID:  r.TableID,
+      Name:     r.Name,
+      QRCode:   r.QRCode,
+      IsActive: r.IsActive,
+      AreaID:   r.AreaID,
+      AreaName: r.AreaName,
+      Session:  r.SessionID ? {
+        SessionID:          r.SessionID,
+        Status:             r.SessionStatus,
+        GuestCount:         r.SessionGuestCount,
+        StartTime:          r.SessionStartTime,
+        TotalAmount:        parseFloat(r.SessionTotalAmount) || 0,
+        CancelRequestCount: parseInt(r.CancelRequestCount, 10) || 0,
+        NeedSupport:        Boolean(ramSupport),
+        SupportNote:        ramSupport ? ramSupport.note : null,
+        Order:              r.OrderStatus !== null ? { Status: r.OrderStatus } : null,
+      } : null,
+    };
+  });
 };
 
 

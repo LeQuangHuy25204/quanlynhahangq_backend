@@ -50,6 +50,26 @@ router.post(
 );
 
 /**
+ * @route   POST /api/sessions/call-staff
+ * @desc    Khách hàng gọi nhân viên hỗ trợ tại bàn
+ * @access  Public (cần sessionToken)
+ * @body    { sessionToken: string, reason?: string }
+ */
+router.post('/call-staff', sessionController.requestStaffSupport);
+
+/**
+ * @route   DELETE /api/sessions/:sessionId/call-staff
+ * @desc    Nhân viên xác nhận đã hỗ trợ khách tại bàn
+ * @access  Protected (Waiter, Cashier, BranchManager, RestaurantAdmin)
+ */
+router.delete(
+  '/:sessionId/call-staff',
+  authenticate,
+  requireRole('Waiter', 'Cashier', 'BranchManager', 'RestaurantAdmin'),
+  sessionController.resolveStaffSupport
+);
+
+/**
  * @route   GET /api/sessions/:sessionId
  * @desc    Lấy thông tin phiên theo ID (khách poll trạng thái)
  * @access  Public (khách chờ mở bàn cần poll)

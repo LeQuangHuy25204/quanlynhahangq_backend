@@ -75,9 +75,12 @@ const findOrderWithLines = async (orderId) => {
  */
 const findOrderLineById = async (orderLineId, conn = pool) => {
   const [rows] = await conn.execute(
-    `SELECT ol.OrderLineID, ol.OrderID, ol.MenuItemID, ol.PromotionID, ol.Quantity, ol.UnitPrice,
-            ol.LineTotal, ol.Note, ol.Status, ol.DiscountApplied, a.BranchID
+    `SELECT ol.OrderLineID, ol.OrderID, ol.MenuItemID, mi.Name AS MenuItemName,
+            ol.PromotionID, ol.Quantity, ol.UnitPrice,
+            ol.LineTotal, ol.Note, ol.Status, ol.DiscountApplied, ol.CancelReason,
+            s.SessionID, s.SessionToken, s.Status AS SessionStatus, a.BranchID
      FROM orderline ol
+     INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
      INNER JOIN \`order\` o ON ol.OrderID = o.OrderID
      INNER JOIN session s ON o.SessionID = s.SessionID
      INNER JOIN \`table\` t ON s.TableID = t.TableID
@@ -107,13 +110,16 @@ const verifyOrderLineBelongsToBranch = async (orderLineId, branchId) => {
 
 /**
  * Cập nhật số lượng và trạng thái cho 1 OrderLine.
+ * Nếu chuyển sang trạng thái Đang chế biến (4), Chờ phục vụ (5) hoặc Đã phục vụ (6) thì tự động xóa cờ [YC_HUY] còn treo.
  */
 const updateOrderLineQuantityAndStatus = async (orderLineId, quantity, status) => {
+  const clearCancelReq = [4, 5, 6].includes(Number(status));
   const [result] = await pool.execute(
     `UPDATE orderline
-     SET Quantity = ?, LineTotal = ROUND(? * UnitPrice, 2), Status = ?
+     SET Quantity = ?, LineTotal = ROUND(? * UnitPrice, 2), Status = ?,
+         CancelReason = CASE WHEN ? = 1 AND CancelReason LIKE '[YC_HUY]%' THEN NULL ELSE CancelReason END
      WHERE OrderLineID = ?`,
-    [quantity, quantity, status, orderLineId]
+    [quantity, quantity, status, clearCancelReq ? 1 : 0, orderLineId]
   );
   return result.affectedRows;
 };
@@ -168,11 +174,26 @@ const cancelOrderLine = async (orderLineId, { cancelledBy, cancelReason }, conn 
 };
 
 /**
+ * Khách hàng gửi yêu cầu hủy món hoặc nhân viên từ chối yêu cầu hủy (lưu vào CancelReason khi Status != 3).
+ */
+const setOrderLineCancelRequest = async (orderLineId, cancelReason = null, conn = pool) => {
+  const [result] = await conn.execute(
+    `UPDATE orderline
+     SET CancelReason = ?
+     WHERE OrderLineID = ?`,
+    [cancelReason, orderLineId]
+  );
+  return result.affectedRows;
+};
+
+/**
  * Tìm tất cả các order lines thuộc về 1 session (gộp tất cả orders của bàn)
  */
 const findOrderLinesBySessionId = async (sessionId) => {
   const [rows] = await pool.execute(
-    `SELECT ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, ol.Quantity, ol.UnitPrice, ol.LineTotal, ol.Note, ol.Status,
+    `SELECT ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, ol.Quantity, ol.UnitPrice, ol.LineTotal,
+            ol.Note, ol.Status, ol.CancelReason, ol.CancelledAt,
+            (CASE WHEN ol.Status != 3 AND ol.CancelReason LIKE '[YC_HUY]%' THEN 1 ELSE 0 END) AS CancelRequested,
             o.OrderID, o.Status AS OrderStatus, mi.IsWeightBased, sp.GuestName
      FROM orderline ol
      INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
@@ -192,14 +213,17 @@ const findOrdersByBranch = async (branchId, status = null) => {
   let query = `SELECT 
        o.OrderID, o.OrderNumber, o.Status AS OrderStatus, o.SessionID, o.CreatedAt AS OrderCreatedAt,
        t.Name AS TableName, a.Name AS AreaName,
-       ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, 
-       ol.Quantity, ol.UnitPrice, ol.Status, ol.Note, ol.CreatedAt AS LineCreatedAt
+       ol.OrderLineID, ol.MenuItemID, mi.Name AS MenuItemName, mi.IsWeightBased,
+       ol.Quantity, ol.UnitPrice, ol.Status, ol.Note, ol.CancelReason,
+       (CASE WHEN ol.Status != 3 AND ol.CancelReason LIKE '[YC_HUY]%' THEN 1 ELSE 0 END) AS CancelRequested,
+       ol.CreatedAt AS LineCreatedAt, sp.GuestName
      FROM \`order\` o
      INNER JOIN session s ON o.SessionID = s.SessionID
      INNER JOIN \`table\` t ON s.TableID = t.TableID
      INNER JOIN area a ON t.AreaID = a.AreaID
      INNER JOIN orderline ol ON o.OrderID = ol.OrderID
      INNER JOIN menuitem mi ON ol.MenuItemID = mi.MenuItemID
+     LEFT JOIN sessionparticipant sp ON o.ParticipantID = sp.ParticipantID
      WHERE a.BranchID = ? AND ol.Status != 3 AND s.Status != 2`; // Avoid closed sessions
 
   const params = [branchId];
@@ -230,10 +254,14 @@ const findOrdersByBranch = async (branchId, status = null) => {
       OrderLineID: row.OrderLineID,
       MenuItemID: row.MenuItemID,
       MenuItemName: row.MenuItemName,
+      IsWeightBased: row.IsWeightBased,
       Quantity: row.Quantity,
       UnitPrice: row.UnitPrice,
       Status: row.Status,
       Note: row.Note,
+      CancelReason: row.CancelReason,
+      CancelRequested: row.CancelRequested === 1,
+      GuestName: row.GuestName,
       CreatedAt: row.LineCreatedAt
     });
   });
@@ -252,6 +280,7 @@ module.exports = {
   updateOrderStatus,
   updateAllOrdersStatusInSession,
   cancelOrderLine,
+  setOrderLineCancelRequest,
   findOrderLinesBySessionId,
   findOrdersByBranch,
 };

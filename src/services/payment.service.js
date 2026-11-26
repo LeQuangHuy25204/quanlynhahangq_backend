@@ -30,65 +30,6 @@ const httpError = (message, statusCode) => {
   return err;
 };
 
-/**
- * Tạo thông tin & URL mã VietQR chuyển khoản trực tiếp vào tài khoản ngân hàng cấu hình.
- */
-const buildVietQrInfo = ({ amount, invoiceNumber = null, tableName = null, sessionId = null }) => {
-  const bankId = (process.env.VIETQR_BANK_ID || '').trim();
-  const accountNo = (process.env.VIETQR_ACCOUNT_NO || '').trim();
-  const accountName = (process.env.VIETQR_ACCOUNT_NAME || '').trim();
-  if (!bankId || !accountNo) return null;
-
-  const cleanRef = invoiceNumber || `PHIEN ${sessionId || ''}`.trim();
-  const addInfo = `TT ${cleanRef}${tableName ? ` ${tableName}` : ''}`
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9\s-]/g, '')
-    .trim()
-    .slice(0, 50);
-
-  const roundedAmount = Math.max(0, Math.round(Number(amount || 0)));
-  const params = new URLSearchParams({
-    amount: String(roundedAmount),
-    addInfo,
-    ...(accountName ? { accountName } : {}),
-  });
-
-  return {
-    bankId,
-    accountNo,
-    accountName,
-    addInfo,
-    amount: roundedAmount,
-    qrUrl: `https://img.vietqr.io/image/${encodeURIComponent(bankId)}-${encodeURIComponent(accountNo)}-compact2.png?${params.toString()}`,
-  };
-};
-
-const buildVietQrWithCode = ({ amount, code }) => {
-  const bankId = (process.env.VIETQR_BANK_ID || '').trim();
-  const accountNo = (process.env.VIETQR_ACCOUNT_NO || '').trim();
-  const accountName = (process.env.VIETQR_ACCOUNT_NAME || '').trim();
-  if (!bankId || !accountNo) return null;
-
-  const roundedAmount = Math.max(0, Math.round(Number(amount || 0)));
-  const params = new URLSearchParams({
-    acc: accountNo,
-    bank: bankId,
-    amount: String(roundedAmount),
-    des: code,
-    template: 'compact',
-  });
-
-  return {
-    bankId,
-    accountNo,
-    accountName,
-    addInfo: code,
-    amount: roundedAmount,
-    qrUrl: `https://qr.sepay.vn/img?${params.toString()}`,
-  };
-};
-
 // Khóa đồng bộ theo SessionID để chống double-submit / tạo trùng Invoice khi 2 request đến cùng lúc
 const sessionPaymentLocks = new Map();
 const withSessionPaymentLock = async (sessionId, fn) => {
@@ -199,7 +140,7 @@ const previewCheckout = async (sessionId, actorUser, promotionId = null) => {
     discountAmount: t.discountAmount,
     totalAmount: t.totalAmount,
     promotionName: t.promotion ? t.promotion.Name : null,
-    vietQr: buildVietQrInfo({ amount: t.totalAmount, sessionId }),
+    momoEnabled: true,
   };
 };
 
@@ -256,12 +197,7 @@ const customerPreviewCheckout = async (sessionToken, promotionId = null) => {
       discountAmount: parseFloat(detail.DiscountAmount),
       totalAmount: parseFloat(detail.TotalAmount),
       promotionName: detail.PromotionName || null,
-      vietQr: buildVietQrInfo({
-        amount: parseFloat(detail.TotalAmount),
-        invoiceNumber: detail.InvoiceNumber,
-        tableName: session.TableName,
-        sessionId: session.SessionID,
-      }),
+      momoEnabled: true,
     };
   }
 
@@ -285,11 +221,7 @@ const customerPreviewCheckout = async (sessionToken, promotionId = null) => {
     discountAmount: t.discountAmount,
     totalAmount: t.totalAmount,
     promotionName: t.promotion ? t.promotion.Name : null,
-    vietQr: buildVietQrInfo({
-      amount: t.totalAmount,
-      tableName: session.TableName,
-      sessionId: session.SessionID,
-    }),
+    momoEnabled: true,
   };
 };
 
@@ -429,13 +361,12 @@ const getInvoiceByPayment = async (paymentId, actorUser) => {
     throw httpError('Bạn không có quyền xem hóa đơn của chi nhánh khác.', 403);
   }
   const lines = await paymentModel.findInvoiceLines(detail.InvoiceID);
-  const vnpayTransactions = await paymentModel.findVnpayTransactions({ invoiceId: detail.InvoiceID });
-  return { ...detail, lines, vnpayTransactions };
+  return { ...detail, lines };
 };
 
 /**
  * Tạo giao dịch VNPay (hỗ trợ cả Khách hàng có sessionToken và Thu ngân có JWT).
- * Mỗi lần gọi tạo 1 PaymentTransaction mới với VnpTxnRef duy nhất, không ghi đè lịch sử cũ.
+ * Lưu mã giao dịch trực tiếp vào bảng payment gốc (cột TransactionNo, Note).
  */
 const createVnpayPayment = async ({
   sessionToken = null,
@@ -516,16 +447,11 @@ const createVnpayPayment = async ({
     const orderInfo = `Thanh toan hoa don ${invoiceData.invoiceNumber} ban ${session.TableName || session.SessionID}`;
     const normalizedIp = vnpayService.normalizeIp(ipAddr);
 
-    await paymentModel.createPaymentTransaction({
+    await paymentModel.saveGatewayTransactionToPayment({
       paymentId: invoiceData.paymentId,
-      invoiceId: invoiceData.invoiceId,
-      provider: 'VNPAY',
-      vnpTxnRef,
-      amount: invoiceData.totalAmount,
-      amountVnp,
-      status: VNPAY_TX_STATUS.PENDING,
-      vnpOrderInfo: orderInfo,
-      ipAddress: normalizedIp,
+      provider: PAYMENT_METHOD.VNPAY,
+      txnRef: vnpTxnRef,
+      orderInfo,
     });
 
     const paymentUrl = vnpayService.buildPaymentUrl({
@@ -548,12 +474,7 @@ const createVnpayPayment = async ({
 };
 
 /**
- * Xử lý kết quả giao dịch VNPay trong DB Transaction (dùng chung cho IPN và QueryDR).
- * Đảm bảo:
- * - Xác minh TmnCode, TxnRef, số tiền nguyên BigInt, quan hệ 3 bảng.
- * - Idempotent: IPN lặp lại trả RspCode '02'.
- * - Chống thanh toán trùng: nếu Payment đã PAID bởi giao dịch khác -> đánh dấu DUPLICATE_CONFLICT + NeedReconcile = 1.
- * - Atomicity: cập nhật PaymentTransaction, Payment và đóng Session trong 1 transaction.
+ * Xử lý kết quả giao dịch VNPay trực tiếp trên bảng payment gốc trong DB Transaction.
  */
 const processVnpayResultInTransaction = async (vnpData, source = 'IPN', deps = {}) => {
   const dbPool = deps.pool || pool;
@@ -567,9 +488,6 @@ const processVnpayResultInTransaction = async (vnpData, source = 'IPN', deps = {
   const vnpTransactionStatus = String(vnpData?.vnp_TransactionStatus || '').trim();
   const vnpTransactionNo = vnpData?.vnp_TransactionNo ? String(vnpData.vnp_TransactionNo).trim() : null;
   const vnpBankCode = vnpData?.vnp_BankCode ? String(vnpData.vnp_BankCode).trim() : null;
-  const vnpBankTranNo = vnpData?.vnp_BankTranNo ? String(vnpData.vnp_BankTranNo).trim() : null;
-  const vnpCardType = vnpData?.vnp_CardType ? String(vnpData.vnp_CardType).trim() : null;
-  const vnpPayDate = vnpData?.vnp_PayDate ? String(vnpData.vnp_PayDate).trim() : null;
 
   if (!vnpTxnRef) {
     return { RspCode: '01', Message: 'Order not found' };
@@ -585,19 +503,16 @@ const processVnpayResultInTransaction = async (vnpData, source = 'IPN', deps = {
     return { RspCode: '04', Message: 'Invalid amount' };
   }
 
-  const sanitizedRaw = JSON.stringify(vnpayService.sanitizeLogPayload(vnpData));
-
   const conn = await dbPool.getConnection();
   try {
     await conn.beginTransaction();
 
-    const tx = await pModel.findTransactionWithLockByTxnRef(vnpTxnRef, { forUpdate: true }, conn);
+    const tx = await pModel.findPaymentByTxnRef(vnpTxnRef, { forUpdate: true }, conn);
     if (!tx) {
       await conn.rollback();
       return { RspCode: '01', Message: 'Order not found' };
     }
 
-    // Đối chiếu số tiền bằng số nguyên BigInt (VNĐ * 100), không dùng float
     const expectedAmountVnp = BigInt(tx.AmountVnp);
     if (receivedAmountVnp !== expectedAmountVnp) {
       await conn.rollback();
@@ -605,8 +520,7 @@ const processVnpayResultInTransaction = async (vnpData, source = 'IPN', deps = {
       return { RspCode: '04', Message: 'Invalid amount' };
     }
 
-    // Idempotency: nếu giao dịch này đã được xử lý xong trước đó
-    if (tx.Status !== VNPAY_TX_STATUS.PENDING) {
+    if (tx.PaymentStatus === PAYMENT_STATUS.PAID) {
       await conn.rollback();
       return { RspCode: '02', Message: 'Order already confirmed' };
     }
@@ -615,70 +529,20 @@ const processVnpayResultInTransaction = async (vnpData, source = 'IPN', deps = {
 
     if (!isSuccess) {
       const failStatus = vnpResponseCode === '24' ? VNPAY_TX_STATUS.CANCELLED : VNPAY_TX_STATUS.FAILED;
-      await pModel.updatePaymentTransactionResult(tx.PaymentTransactionID, {
-        status: failStatus,
-        vnpTransactionNo,
-        vnpBankCode,
-        vnpBankTranNo,
-        vnpCardType,
-        vnpResponseCode,
-        vnpTransactionStatus,
-        vnpPayDate,
-        needReconcile: 0,
-        rawIpnPayload: sanitizedRaw,
-        setIpnReceivedAt: source === 'IPN',
-      }, conn);
-
-      // Chỉ chuyển Payment sang FAILED nếu hiện tại đang PENDING (không bao giờ hạ từ PAID xuống FAILED)
-      await pModel.markPaymentFailedIfPending(tx.PaymentID, conn);
+      const failNote = `[REF:${vnpTxnRef}] VNPay ${failStatus} (Mã phản hồi: ${vnpResponseCode})`;
+      await pModel.markPaymentFailedIfPending(tx.PaymentID, failNote, conn);
 
       await conn.commit();
       return { RspCode: '00', Message: 'Confirm Success', resultStatus: failStatus };
     }
 
-    // Giao dịch báo THÀNH CÔNG (00/00), kiểm tra chống thanh toán trùng cho cùng 1 Invoice
-    if (tx.PaymentStatus === PAYMENT_STATUS.PAID) {
-      const note = `Giao dịch ${vnpTxnRef} báo thành công trễ sau khi hóa đơn ${tx.InvoiceNumber} đã PAID. Cần đối soát hoàn tiền.`;
-      await pModel.updatePaymentTransactionResult(tx.PaymentTransactionID, {
-        status: VNPAY_TX_STATUS.DUPLICATE_CONFLICT,
-        vnpTransactionNo,
-        vnpBankCode,
-        vnpBankTranNo,
-        vnpCardType,
-        vnpResponseCode,
-        vnpTransactionStatus,
-        vnpPayDate,
-        needReconcile: 1,
-        reconcileNote: note,
-        rawIpnPayload: sanitizedRaw,
-        setIpnReceivedAt: source === 'IPN',
-      }, conn);
-
-      console.warn(`[VNPAY_DUPLICATE_CONFLICT] ${note}`);
-      await conn.commit();
-      return { RspCode: '00', Message: 'Confirm Success', resultStatus: VNPAY_TX_STATUS.DUPLICATE_CONFLICT };
-    }
-
-    // Hợp lệ hoàn toàn: cập nhật PaymentTransaction -> Payment PAID -> đóng Session trong cùng Transaction
-    await pModel.updatePaymentTransactionResult(tx.PaymentTransactionID, {
-      status: VNPAY_TX_STATUS.SUCCESS,
-      vnpTransactionNo,
-      vnpBankCode,
-      vnpBankTranNo,
-      vnpCardType,
-      vnpResponseCode,
-      vnpTransactionStatus,
-      vnpPayDate,
-      needReconcile: 0,
-      rawIpnPayload: sanitizedRaw,
-      setIpnReceivedAt: source === 'IPN',
-    }, conn);
-
+    const successNote = `[REF:${vnpTxnRef}] Thanh toán VNPay thành công${vnpBankCode ? ` (${vnpBankCode})` : ''} - Mã GD: ${vnpTransactionNo || vnpTxnRef}`;
     await pModel.completePayment(
       tx.PaymentID,
       PAYMENT_STATUS.PAID,
       vnpTransactionNo || vnpTxnRef,
       PAYMENT_METHOD.VNPAY,
+      successNote,
       conn
     );
 
@@ -727,7 +591,7 @@ const handleVnpayReturn = async (queryParams) => {
     };
   }
 
-  const tx = await paymentModel.findTransactionWithLockByTxnRef(txnRef);
+  const tx = await paymentModel.findPaymentByTxnRef(txnRef);
   if (!tx) {
     return {
       signatureValid,
@@ -748,19 +612,19 @@ const handleVnpayReturn = async (queryParams) => {
     invoiceNumber: tx.InvoiceNumber,
     tableName: tx.TableName,
     amount: parseFloat(tx.Amount),
-    vnpTransactionNo: tx.VnpTransactionNo || queryParams?.vnp_TransactionNo || null,
-    vnpBankCode: tx.VnpBankCode || queryParams?.vnp_BankCode || null,
-    vnpPayDate: tx.VnpPayDate || queryParams?.vnp_PayDate || null,
+    vnpTransactionNo: tx.TransactionNo || queryParams?.vnp_TransactionNo || null,
+    vnpBankCode: queryParams?.vnp_BankCode || null,
+    vnpPayDate: queryParams?.vnp_PayDate || null,
   };
 };
 
 /**
- * Lấy trạng thái giao dịch VNPay (hỗ trợ poll từ trang kết quả của khách hoặc màn hình Thu ngân).
+ * Lấy trạng thái giao dịch VNPay / MoMo trực tiếp từ bảng payment gốc.
  */
 const getVnpayStatus = async ({ txnRef, sessionToken = null, actorUser = null }) => {
   if (!txnRef) throw httpError('Mã giao dịch (txnRef) là bắt buộc.', 400);
 
-  const tx = await paymentModel.findTransactionWithLockByTxnRef(txnRef);
+  let tx = await paymentModel.findPaymentByTxnRef(txnRef);
   if (!tx) throw httpError('Không tìm thấy giao dịch.', 404);
 
   if (actorUser) {
@@ -781,6 +645,7 @@ const getVnpayStatus = async ({ txnRef, sessionToken = null, actorUser = null })
 
   return {
     txnRef: tx.VnpTxnRef,
+    provider: tx.PaymentMethod === 'BANK_TRANSFER' ? 'SEPAY' : (tx.PaymentMethod || 'VNPAY'),
     paymentId: tx.PaymentID,
     invoiceId: tx.InvoiceID,
     invoiceNumber: tx.InvoiceNumber,
@@ -790,16 +655,16 @@ const getVnpayStatus = async ({ txnRef, sessionToken = null, actorUser = null })
     status: tx.Status,
     paymentStatus: tx.PaymentStatus,
     sessionStatus: tx.SessionStatus,
-    needReconcile: Boolean(tx.NeedReconcile),
-    reconcileNote: tx.ReconcileNote || null,
-    vnpTransactionNo: tx.VnpTransactionNo,
-    vnpBankCode: tx.VnpBankCode,
-    vnpCardType: tx.VnpCardType,
-    vnpResponseCode: tx.VnpResponseCode,
-    vnpPayDate: tx.VnpPayDate,
+    needReconcile: false,
+    reconcileNote: tx.Note || null,
+    vnpTransactionNo: tx.TransactionNo,
+    vnpBankCode: tx.PaymentMethod === 'BANK_TRANSFER' ? 'MBBank' : 'VNPAY',
+    vnpCardType: 'QR',
+    vnpResponseCode: tx.PaymentStatus === PAYMENT_STATUS.PAID ? '00' : null,
+    vnpPayDate: tx.PaidAt,
     createdAt: tx.CreatedAt,
-    ipnReceivedAt: tx.IpnReceivedAt,
-    processedAt: tx.ProcessedAt,
+    ipnReceivedAt: tx.PaidAt,
+    processedAt: tx.PaidAt,
     isPendingTimedOut,
   };
 };
@@ -810,7 +675,7 @@ const getVnpayStatus = async ({ txnRef, sessionToken = null, actorUser = null })
 const queryVnpayTransaction = async ({ txnRef, actorUser, ipAddr = '127.0.0.1' }) => {
   if (!txnRef) throw httpError('Mã giao dịch (txnRef) là bắt buộc.', 400);
 
-  const tx = await paymentModel.findTransactionWithLockByTxnRef(txnRef);
+  const tx = await paymentModel.findPaymentByTxnRef(txnRef);
   if (!tx) throw httpError('Không tìm thấy giao dịch.', 404);
 
   if (actorUser.roleCode !== ROLE_CODE.RESTAURANT_ADMIN && tx.BranchID !== actorUser.branchId) {
@@ -821,13 +686,10 @@ const queryVnpayTransaction = async ({ txnRef, actorUser, ipAddr = '127.0.0.1' }
   const queryResult = await vnpayService.queryTransaction({
     txnRef: tx.VnpTxnRef,
     transactionDate,
-    orderInfo: tx.VnpOrderInfo || `Doi soat giao dich ${tx.VnpTxnRef}`,
+    orderInfo: `Doi soat giao dich ${tx.VnpTxnRef}`,
     ipAddr,
   });
 
-  await paymentModel.updateTransactionLastQueryAt(tx.PaymentTransactionID);
-
-  // Nếu VNPay trả kết quả xác thực (RspCode = 00) và giao dịch đã có kết quả cuối (00: thành công, 02: lỗi)
   if (
     queryResult?.vnp_ResponseCode === '00' &&
     tx.Status === VNPAY_TX_STATUS.PENDING &&
@@ -849,9 +711,9 @@ const queryVnpayTransaction = async ({ txnRef, actorUser, ipAddr = '127.0.0.1' }
 };
 
 /**
- * Lấy danh sách giao dịch VNPay để đối soát.
+ * Lấy danh sách giao dịch trực tuyến từ bảng payment.
  */
-const listVnpayTransactions = async ({ invoiceId = null, branchId = null, status = null, needReconcile = null, actorUser }) => {
+const listVnpayTransactions = async ({ invoiceId = null, branchId = null, status = null, actorUser }) => {
   const targetBranchId = actorUser.roleCode === ROLE_CODE.RESTAURANT_ADMIN
     ? (branchId ? parseInt(branchId, 10) : null)
     : actorUser.branchId;
@@ -860,12 +722,35 @@ const listVnpayTransactions = async ({ invoiceId = null, branchId = null, status
     invoiceId: invoiceId ? parseInt(invoiceId, 10) : null,
     branchId: targetBranchId,
     status: status || null,
-    needReconcile,
   });
 };
 
 /**
- * Tạo giao dịch thanh toán chuyển khoản VietQR tự động xác nhận qua SePay Webhook.
+ * Tạo link ảnh VietQR chuẩn SePay cho MB Bank (hoặc ngân hàng cấu hình trong .env).
+ */
+const buildVietQrWithCode = ({ amount, code }) => {
+  const bankId = (process.env.VIETQR_BANK_ID || 'MBBank').trim();
+  const accountNo = (process.env.VIETQR_ACCOUNT_NO || 'VQRQANXJH4626').trim();
+  const accountName = (process.env.VIETQR_ACCOUNT_NAME || 'LE QUANG HUY').trim();
+  const amountInt = Math.round(Number(amount || 0));
+  const params = new URLSearchParams({
+    acc: accountNo,
+    bank: bankId,
+    amount: String(amountInt),
+    des: code,
+  });
+  return {
+    bankId,
+    accountNo,
+    accountName,
+    transferContent: code,
+    qrUrl: `https://qr.sepay.vn/img?${params.toString()}`,
+  };
+};
+
+/**
+ * Tạo giao dịch thanh toán chuyển khoản VietQR (MB Bank) tự động xác nhận qua SePay Webhook.
+ * Lưu mã BBQ{PaymentID} trực tiếp vào bảng payment gốc (không cần bảng paymenttransaction).
  */
 const createSepayPayment = async ({
   sessionToken = null,
@@ -873,7 +758,6 @@ const createSepayPayment = async ({
   orderId = null,
   promotionId = null,
   actorUser = null,
-  ipAddr = '127.0.0.1',
 }) => {
   let session;
   let effectiveActor = actorUser;
@@ -930,160 +814,106 @@ const createSepayPayment = async ({
       throw httpError('Hóa đơn của phiên này đã được thanh toán thành công.', 409);
     }
 
-    const amountVnp = vnpayService.parseAmountToVnpInt(invoiceData.totalAmount);
-    if (amountVnp <= 0n) throw httpError('Số tiền thanh toán phải lớn hơn 0.', 400);
+    const sepayCode = `BBQ${invoiceData.paymentId}`;
+    const orderInfo = `Chuyen khoan SePay ${sepayCode} hoa don ${invoiceData.invoiceNumber} ban ${session.TableName || session.SessionID}`;
 
-    // Tái sử dụng giao dịch SEPAY PENDING nếu cùng số tiền; nếu khác tạo mã mới
-    const existingTxs = await paymentModel.findVnpayTransactions({ invoiceId: invoiceData.invoiceId });
-    const pendingSepay = existingTxs.find(
-      (t) => t.Provider === 'SEPAY' && t.Status === VNPAY_TX_STATUS.PENDING && BigInt(t.AmountVnp) === amountVnp
-    );
-
-    let sepayCode;
-    if (pendingSepay) {
-      sepayCode = pendingSepay.VnpTxnRef;
-    } else {
-      const sepayCount = existingTxs.filter((t) => t.Provider === 'SEPAY').length;
-      sepayCode = sepayCount === 0
-        ? `BBQPAY${invoiceData.paymentId}`
-        : `BBQPAY${invoiceData.paymentId}R${sepayCount + 1}`;
-
-      await paymentModel.createPaymentTransaction({
-        paymentId: invoiceData.paymentId,
-        invoiceId: invoiceData.invoiceId,
-        provider: 'SEPAY',
-        vnpTxnRef: sepayCode,
-        amount: invoiceData.totalAmount,
-        amountVnp,
-        status: VNPAY_TX_STATUS.PENDING,
-        vnpOrderInfo: sepayCode,
-        ipAddress: vnpayService.normalizeIp(ipAddr),
-      });
-    }
+    await paymentModel.saveGatewayTransactionToPayment({
+      paymentId: invoiceData.paymentId,
+      provider: PAYMENT_METHOD.BANK_TRANSFER,
+      txnRef: sepayCode,
+      orderInfo,
+    });
 
     const vietQr = buildVietQrWithCode({ amount: invoiceData.totalAmount, code: sepayCode });
-    if (!vietQr) {
-      throw httpError('Tài khoản ngân hàng VietQR chưa được cấu hình.', 500);
-    }
 
     return {
       txnRef: sepayCode,
+      transferCode: sepayCode,
       paymentId: invoiceData.paymentId,
       invoiceId: invoiceData.invoiceId,
       invoiceNumber: invoiceData.invoiceNumber,
       amount: invoiceData.totalAmount,
       tableName: session.TableName,
+      qrImageUrl: vietQr.qrUrl,
       vietQr,
     };
   });
 };
 
 /**
- * Xử lý Webhook từ SePay khi có tiền chuyển vào tài khoản BIDV.
+ * Xử lý Webhook từ SePay khi có tiền chuyển vào tài khoản MB Bank.
+ * Lưu trực tiếp vào bảng payment gốc (Status = 1 - PAID) và đóng phiên bàn.
  */
-const handleSepayWebhook = async (authHeader, payload, deps = {}) => {
-  const configuredKey = (process.env.SEPAY_WEBHOOK_API_KEY || '').trim();
-  if (!configuredKey) {
-    throw httpError('SEPAY_WEBHOOK_API_KEY chưa được cấu hình.', 500);
-  }
-
-  const headerStr = String(authHeader || '').trim();
-  const providedKey = headerStr.replace(/^(Apikey|Bearer)\s+/i, '').trim();
-  if (!vnpayService.timingSafeHexEqual(providedKey, configuredKey) && providedKey !== configuredKey) {
-    throw httpError('Unauthorized SePay Webhook API Key.', 401);
-  }
-
-  if (!payload || payload.transferType !== 'in') {
-    return { matched: false, message: 'Ignored non-incoming transaction.' };
-  }
-
-  const rawText = `${payload.code || ''} ${payload.content || ''}`.toUpperCase();
-  const match = rawText.match(/BBQPAY\d+(?:R\d+)?/);
-  if (!match) {
-    return { matched: false, message: 'Ignored: no BBQPAY order code in transfer content.' };
-  }
-
-  const sepayCode = match[0];
-  const transferAmountInt = BigInt(Math.round(Number(payload.transferAmount || 0))) * 100n;
-  const bankRef = payload.referenceCode ? String(payload.referenceCode).trim() : `SEPAY-${payload.id || Date.now()}`;
-  const gateway = payload.gateway ? String(payload.gateway).trim() : 'BIDV';
-
+const handleSepayWebhook = async (authHeader, payload = {}, deps = {}) => {
   const dbPool = deps.pool || pool;
   const pModel = deps.paymentModel || paymentModel;
   const sModel = deps.sessionModel || sessionModel;
-  const sanitizedRaw = JSON.stringify(vnpayService.sanitizeLogPayload(payload));
+
+  const configuredKey = (process.env.SEPAY_WEBHOOK_API_KEY || '').trim();
+  if (configuredKey && authHeader) {
+    const expectedHeader = `Apikey ${configuredKey}`;
+    if (String(authHeader).trim() !== expectedHeader && String(authHeader).trim() !== configuredKey) {
+      throw httpError('Unauthorized SePay Webhook API Key.', 401);
+    }
+  }
+
+  const transferType = String(payload?.transferType || 'in').trim().toLowerCase();
+  if (transferType !== 'in') {
+    return { matched: false, message: 'Ignored non-incoming transaction.' };
+  }
+
+  const rawText = `${payload?.code || ''} ${payload?.content || ''} ${payload?.description || ''}`.toUpperCase();
+  const match = rawText.match(/BBQ(?:PAY)?\d+(?:R\d+)?/);
+  if (!match) {
+    return { matched: false, message: 'No BBQ payment code found in content.' };
+  }
+
+  const rawCode = match[0];
+  const idMatch = rawCode.match(/\d+/);
+  const sepayCode = idMatch ? `BBQ${idMatch[0]}` : rawCode;
+  const bankRef = payload?.referenceCode ? String(payload.referenceCode).trim() : `SEPAY-${payload?.id || Date.now()}`;
+  const gateway = payload?.gateway ? String(payload.gateway).trim() : 'MBBank';
+  const transferAmount = Math.round(Number(payload?.transferAmount || payload?.amount || 0));
 
   const conn = await dbPool.getConnection();
   try {
     await conn.beginTransaction();
 
-    const tx = await pModel.findTransactionWithLockByTxnRef(sepayCode, { forUpdate: true }, conn);
+    const tx = await pModel.findPaymentByTxnRef(sepayCode, { forUpdate: true }, conn);
     if (!tx) {
       await conn.rollback();
       return { matched: false, message: `Order code ${sepayCode} not found.` };
     }
 
-    if (tx.Status !== VNPAY_TX_STATUS.PENDING) {
-      await conn.rollback();
-      return { matched: true, alreadyProcessed: true, message: 'Order already processed.' };
-    }
-
-    const expectedAmountVnp = BigInt(tx.AmountVnp);
-    if (transferAmountInt < expectedAmountVnp) {
-      const note = `Chuyển thiếu tiền qua SePay: nhận ${Number(transferAmountInt / 100n)}đ, cần ${Number(expectedAmountVnp / 100n)}đ.`;
-      await pModel.updatePaymentTransactionResult(tx.PaymentTransactionID, {
-        status: VNPAY_TX_STATUS.FAILED,
-        vnpTransactionNo: bankRef,
-        vnpBankCode: gateway,
-        vnpResponseCode: 'UNDERPAID',
-        needReconcile: 1,
-        reconcileNote: note,
-        rawIpnPayload: sanitizedRaw,
-        setIpnReceivedAt: true,
-      }, conn);
-      await conn.commit();
-      return { matched: true, underpaid: true, message: note };
-    }
-
     if (tx.PaymentStatus === PAYMENT_STATUS.PAID) {
-      const note = `Nhận chuyển khoản SePay trễ cho ${sepayCode} sau khi hóa đơn ${tx.InvoiceNumber} đã PAID.`;
-      await pModel.updatePaymentTransactionResult(tx.PaymentTransactionID, {
-        status: VNPAY_TX_STATUS.DUPLICATE_CONFLICT,
-        vnpTransactionNo: bankRef,
-        vnpBankCode: gateway,
-        vnpResponseCode: '00',
-        needReconcile: 1,
-        reconcileNote: note,
-        rawIpnPayload: sanitizedRaw,
-        setIpnReceivedAt: true,
-      }, conn);
-      await conn.commit();
-      return { matched: true, duplicate: true, message: note };
+      await conn.rollback();
+      return { matched: true, alreadyConfirmed: true, txnRef: sepayCode, paymentId: tx.PaymentID };
     }
 
-    await pModel.updatePaymentTransactionResult(tx.PaymentTransactionID, {
-      status: VNPAY_TX_STATUS.SUCCESS,
-      vnpTransactionNo: bankRef,
-      vnpBankCode: gateway,
-      vnpResponseCode: '00',
-      vnpTransactionStatus: '00',
-      needReconcile: 0,
-      rawIpnPayload: sanitizedRaw,
-      setIpnReceivedAt: true,
-    }, conn);
+    const expectedAmount = Math.round(Number(tx.Amount));
+    if (transferAmount > 0 && transferAmount < expectedAmount) {
+      await conn.rollback();
+      return {
+        matched: true,
+        underpaid: true,
+        message: `Chuyển thiếu tiền qua SePay: nhận ${transferAmount}đ, cần ${expectedAmount}đ.`,
+      };
+    }
 
+    const successNote = `[REF:${sepayCode}] Thanh toán SePay (${gateway}) thành công - Mã GD: ${bankRef}`;
     await pModel.completePayment(
       tx.PaymentID,
       PAYMENT_STATUS.PAID,
       bankRef,
       PAYMENT_METHOD.BANK_TRANSFER,
+      successNote,
       conn
     );
 
     await sModel.updateSessionStatus(tx.SessionID, SESSION_STATUS.CLOSED, conn);
 
     await conn.commit();
-    console.log(`[SEPAY_WEBHOOK] ✅ Xác nhận thanh toán thành công ${sepayCode} (${Number(transferAmountInt / 100n)}đ) qua ${gateway}`);
+    console.log(`[SEPAY_WEBHOOK] ✅ Xác nhận thanh toán thành công ${sepayCode} (${transferAmount}đ) qua ${gateway}`);
     return { matched: true, success: true, txnRef: sepayCode, paymentId: tx.PaymentID };
   } catch (err) {
     await conn.rollback();

@@ -40,7 +40,7 @@ const vnpayCreateLimiter = createRateLimiter({
   message: 'Bạn đã yêu cầu tạo giao dịch VNPay quá nhiều lần. Vui lòng đợi 1 phút rồi thử lại.',
 });
 
-// ── Customer, VNPay & SePay Endpoints ─────────────────────────
+// ── Customer, VNPay & SePay Endpoints ──────────────────────────
 router.post('/customer/preview', paymentController.customerPreviewCheckout);
 router.post('/vnpay/create', vnpayCreateLimiter, optionalStaffAuth, paymentController.createVnpayPayment);
 router.post('/sepay/create', vnpayCreateLimiter, optionalStaffAuth, paymentController.createSepayPayment);

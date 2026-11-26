@@ -215,6 +215,7 @@ const listVnpayTransactions = async (req, res, next) => {
 
 /**
  * POST /api/payments/sepay/create
+ * Tạo mã QR VietQR (MB Bank) và lưu mã BBQ{PaymentID} trực tiếp vào bảng payment.
  */
 const createSepayPayment = async (req, res, next) => {
   try {
@@ -227,12 +228,11 @@ const createSepayPayment = async (req, res, next) => {
       orderId: orderId ? parseInt(orderId, 10) : null,
       promotionId: promotionId ? parseInt(promotionId, 10) : null,
       actorUser: req.user || null,
-      ipAddr: extractClientIp(req),
     });
 
     res.status(201).json({
       success: true,
-      message: 'Tạo mã QR chuyển khoản SePay thành công.',
+      message: 'Tạo mã QR chuyển khoản SePay (MB Bank) thành công.',
       data,
     });
   } catch (err) {
@@ -242,13 +242,17 @@ const createSepayPayment = async (req, res, next) => {
 
 /**
  * POST /api/payments/sepay/webhook
+ * Nhận Webhook tự động từ SePay khi có tiền chuyển vào tài khoản MB Bank.
  */
-const sepayWebhook = async (req, res, next) => {
+const sepayWebhook = async (req, res) => {
   try {
     const data = await paymentService.handleSepayWebhook(req.headers['authorization'], req.body);
-    res.status(200).json({ success: true, ...data });
+    return res.status(200).json({ success: true, ...data });
   } catch (err) {
-    next(err);
+    return res.status(err.statusCode || 200).json({
+      success: false,
+      message: err.message || 'SePay webhook error',
+    });
   }
 };
 

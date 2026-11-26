@@ -99,6 +99,10 @@ const findParticipantByName = async (sessionId, guestName) => {
   return rows[0] || null;
 };
 
+// Lưu tín hiệu "Gọi nhân viên hỗ trợ" trên bộ nhớ RAM của Server (In-Memory Map theo SessionID)
+// Không ghi vào bảng sessionparticipant trong Database
+const supportRequestsMemory = new Map();
+
 /**
  * Lấy danh sách khách hàng đã tham gia phiên (không tính nhân viên order hộ 'NV: %').
  */
@@ -113,6 +117,36 @@ const getSessionParticipants = async (sessionId) => {
     [sessionId]
   );
   return rows;
+};
+
+/**
+ * Khách hàng gửi yêu cầu gọi nhân viên hỗ trợ tại bàn (lưu trên bộ nhớ RAM theo SessionID).
+ */
+const createSupportRequest = async (sessionId, reasonText = 'Khách gọi nhân viên hỗ trợ tại bàn') => {
+  const note = String(reasonText || 'Cần nhân viên hỗ trợ').replace(/^\[HO_TRO\]\s*/i, '').trim().slice(0, 100);
+  const key = Number(sessionId);
+  supportRequestsMemory.set(key, {
+    sessionId: key,
+    note,
+    requestedAt: new Date().toISOString(),
+  });
+  return { requestId: key, note };
+};
+
+/**
+ * Nhân viên xác nhận đã hỗ trợ bàn (xóa yêu cầu hỗ trợ khỏi bộ nhớ RAM).
+ */
+const clearSupportRequest = async (sessionId) => {
+  const key = Number(sessionId);
+  const existed = supportRequestsMemory.delete(key);
+  return existed ? 1 : 0;
+};
+
+/**
+ * Đọc yêu cầu hỗ trợ đang chờ của phiên bàn từ bộ nhớ RAM.
+ */
+const getSupportRequest = (sessionId) => {
+  return supportRequestsMemory.get(Number(sessionId)) || null;
 };
 
 /**
@@ -200,6 +234,9 @@ module.exports = {
   addParticipant,
   findParticipantByName,
   getSessionParticipants,
+  createSupportRequest,
+  clearSupportRequest,
+  getSupportRequest,
   findSessionById,
   updateSessionStatus,
   updateGuestCount

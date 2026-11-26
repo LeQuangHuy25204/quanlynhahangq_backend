@@ -21,11 +21,11 @@ const getBranchConfigBySessionId = async (sessionId) => {
 /**
  * Tạo bản ghi Payment mới (thường là PENDING).
  */
-const createPayment = async ({ invoiceId, amount, paymentMethod, status, note }, conn = pool) => {
+const createPayment = async ({ invoiceId, amount, paymentMethod, status, transactionNo = null, note = null }, conn = pool) => {
   const [result] = await conn.execute(
-    `INSERT INTO payment (InvoiceID, Amount, PaymentMethod, Status, Note)
-     VALUES (?, ?, ?, ?, ?)`,
-    [invoiceId, amount, paymentMethod || 'CASH', status, note || null]
+    `INSERT INTO payment (InvoiceID, Amount, PaymentMethod, Status, TransactionNo, Note)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [invoiceId, amount, paymentMethod || 'CASH', status, transactionNo, note]
   );
   return result.insertId;
 };
@@ -70,23 +70,62 @@ const createInvoiceLines = async (invoiceId, lines, conn = pool) => {
 };
 
 /**
- * Cập nhật trạng thái Payment khi đã thu tiền thành công.
+ * Lưu mã giao dịch cổng thanh toán (MoMo / VNPay) trực tiếp vào bảng payment gốc (cột TransactionNo, Note).
  */
-const completePayment = async (paymentId, status, transactionNo = null, paymentMethod = 'CASH', conn = pool) => {
+const saveGatewayTransactionToPayment = async ({
+  paymentId,
+  provider = 'MOMO',
+  txnRef,
+  orderInfo = null,
+}, conn = pool) => {
+  const noteText = orderInfo
+    ? `[REF:${txnRef}] ${orderInfo}`.slice(0, 500)
+    : `[REF:${txnRef}]`;
   const [result] = await conn.execute(
-    `UPDATE payment SET Status = ?, PaidAt = NOW(), TransactionNo = ?, PaymentMethod = ? WHERE PaymentID = ?`,
-    [status, transactionNo, paymentMethod, paymentId]
+    `UPDATE payment
+     SET PaymentMethod = ?,
+         Status = 0,
+         TransactionNo = ?,
+         Note = ?
+     WHERE PaymentID = ?`,
+    [provider, txnRef, noteText, paymentId]
   );
   return result.affectedRows;
 };
 
 /**
- * Cập nhật trạng thái Payment khi giao dịch VNPay thất bại (chỉ khi hiện đang PENDING).
+ * Cập nhật trạng thái Payment khi đã thu tiền thành công (lưu trực tiếp TransactionNo và Note vào bảng payment).
  */
-const markPaymentFailedIfPending = async (paymentId, conn = pool) => {
+const completePayment = async (paymentId, status, transactionNo = null, paymentMethod = 'CASH', note = null, conn = pool) => {
+  if (note && typeof note === 'object' && typeof note.execute === 'function') {
+    conn = note;
+    note = null;
+  }
+  const safeNote = note ? String(note).slice(0, 500) : null;
   const [result] = await conn.execute(
-    `UPDATE payment SET Status = 2 WHERE PaymentID = ? AND Status = 0`,
-    [paymentId]
+    `UPDATE payment
+     SET Status = ?,
+         PaidAt = NOW(),
+         TransactionNo = COALESCE(?, TransactionNo),
+         PaymentMethod = ?,
+         Note = COALESCE(?, Note)
+     WHERE PaymentID = ?`,
+    [status, transactionNo, paymentMethod, safeNote, paymentId]
+  );
+  return result.affectedRows;
+};
+
+/**
+ * Cập nhật trạng thái Payment khi giao dịch cổng thanh toán thất bại (chỉ khi hiện đang PENDING).
+ */
+const markPaymentFailedIfPending = async (paymentId, note = null, conn = pool) => {
+  const safeNote = note ? String(note).slice(0, 500) : null;
+  const [result] = await conn.execute(
+    `UPDATE payment
+     SET Status = 2,
+         Note = COALESCE(?, Note)
+     WHERE PaymentID = ? AND Status = 0`,
+    [safeNote, paymentId]
   );
   return result.affectedRows;
 };
@@ -127,7 +166,7 @@ const findInvoiceBySessionId = async (sessionId) => {
  */
 const findInvoiceDetailByPaymentId = async (paymentId) => {
   const [rows] = await pool.execute(
-    `SELECT p.PaymentID, p.PaymentMethod, p.Status AS PaymentStatus, p.PaidAt, p.TransactionNo,
+    `SELECT p.PaymentID, p.PaymentMethod, p.Status AS PaymentStatus, p.PaidAt, p.TransactionNo, p.Note,
             i.InvoiceID, i.InvoiceNumber, i.InvoiceDate, i.SessionID, i.BranchID,
             i.SubTotal, i.VATAmount, i.ServiceFeeAmount, i.DiscountAmount, i.TotalAmount,
             b.Name AS BranchName, b.Address AS BranchAddress, b.Phone AS BranchPhone,
@@ -180,138 +219,87 @@ const findPaymentWithInvoice = async (paymentId, conn = pool) => {
 };
 
 /**
- * Tạo bản ghi PaymentTransaction mới (không bao giờ ghi đè lịch sử giao dịch cũ).
+ * Tìm bản ghi Payment theo mã tham chiếu giao dịch (TransactionNo hoặc [REF:...] trong Note).
+ * Không cần bảng paymenttransaction — truy vấn trực tiếp trên bảng payment gốc.
  */
-const createPaymentTransaction = async ({
-  paymentId,
-  invoiceId,
-  provider = 'VNPAY',
-  vnpTxnRef,
-  amount,
-  amountVnp,
-  status = 'PENDING',
-  vnpOrderInfo = null,
-  ipAddress = null,
-}, conn = pool) => {
-  const [result] = await conn.execute(
-    `INSERT INTO paymenttransaction
-       (PaymentID, InvoiceID, Provider, VnpTxnRef, Amount, AmountVnp, Status, VnpOrderInfo, IpAddress)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [paymentId, invoiceId, provider, vnpTxnRef, amount, String(amountVnp), status, vnpOrderInfo, ipAddress]
-  );
-  return result.insertId;
-};
-
-/**
- * Tìm PaymentTransaction theo VnpTxnRef kèm Payment, Invoice, Session (hỗ trợ FOR UPDATE trong Transaction).
- */
-const findTransactionWithLockByTxnRef = async (vnpTxnRef, { forUpdate = false } = {}, conn = pool) => {
+const findPaymentByTxnRef = async (txnRef, { forUpdate = false } = {}, conn = pool) => {
   const lockClause = forUpdate ? 'FOR UPDATE' : '';
+  const refTagPattern = `%[REF:${txnRef}]%`;
+  const idMatch = String(txnRef || '').match(/^(?:BBQ|MOMO|VNP)(\d+)/i);
+  const parsedPaymentId = idMatch ? parseInt(idMatch[1], 10) : -1;
+
   const [rows] = await conn.execute(
-    `SELECT pt.*,
-            p.Status AS PaymentStatus, p.PaymentMethod, p.Amount AS PaymentAmount, p.TransactionNo AS PaymentTransactionNo, p.PaidAt AS PaymentPaidAt,
+    `SELECT p.PaymentID, p.InvoiceID, p.Amount, p.PaymentMethod,
+            p.Status AS PaymentStatus, p.PaidAt, p.TransactionNo, p.Note, p.CreatedAt,
             i.InvoiceNumber, i.SessionID, i.BranchID, i.TotalAmount AS InvoiceTotalAmount,
             s.SessionToken, s.Status AS SessionStatus,
             t.Name AS TableName, a.Name AS AreaName
-     FROM paymenttransaction pt
-     INNER JOIN payment p ON pt.PaymentID = p.PaymentID
-     INNER JOIN invoice i ON pt.InvoiceID = i.InvoiceID
+     FROM payment p
+     INNER JOIN invoice i ON p.InvoiceID = i.InvoiceID
      INNER JOIN session s ON i.SessionID = s.SessionID
      LEFT JOIN \`table\` t ON s.TableID = t.TableID
      LEFT JOIN area a ON t.AreaID = a.AreaID
-     WHERE pt.VnpTxnRef = ?
+     WHERE p.TransactionNo = ? OR p.Note LIKE ? OR p.PaymentID = ?
+     ORDER BY p.PaymentID DESC
+     LIMIT 1
      ${lockClause}`,
-    [vnpTxnRef]
+    [txnRef, refTagPattern, parsedPaymentId]
   );
-  return rows[0] || null;
+
+  const row = rows[0];
+  if (!row) return null;
+
+  const refMatch = row.Note ? row.Note.match(/\[REF:([^\]]+)\]/) : null;
+  const resolvedTxnRef = refMatch ? refMatch[1] : (row.TransactionNo || txnRef);
+  const txStatus =
+    row.PaymentStatus === 1
+      ? 'SUCCESS'
+      : row.PaymentStatus === 2
+      ? 'FAILED'
+      : 'PENDING';
+
+  return {
+    ...row,
+    PaymentTransactionID: row.PaymentID,
+    Provider: row.PaymentMethod,
+    VnpTxnRef: resolvedTxnRef,
+    AmountVnp: String(Math.round(Number(row.Amount) * 100)),
+    Status: txStatus,
+    VnpTransactionNo: row.TransactionNo,
+    VnpBankCode: row.PaymentMethod === 'MOMO' ? 'MOMO' : row.PaymentMethod,
+    VnpOrderInfo: row.Note,
+    ProcessedAt: row.PaidAt,
+  };
 };
 
 /**
- * Cập nhật kết quả xử lý PaymentTransaction (IPN hoặc QueryDR).
+ * Lấy danh sách giao dịch trực tuyến trực tiếp từ bảng payment.
  */
-const updatePaymentTransactionResult = async (paymentTransactionId, {
-  status,
-  vnpTransactionNo = null,
-  vnpBankCode = null,
-  vnpBankTranNo = null,
-  vnpCardType = null,
-  vnpResponseCode = null,
-  vnpTransactionStatus = null,
-  vnpPayDate = null,
-  needReconcile = 0,
-  reconcileNote = null,
-  rawIpnPayload = null,
-  setIpnReceivedAt = true,
-}, conn = pool) => {
-  const ipnTimeExpr = setIpnReceivedAt ? 'COALESCE(IpnReceivedAt, NOW())' : 'IpnReceivedAt';
-  const [result] = await conn.execute(
-    `UPDATE paymenttransaction
-     SET Status = ?,
-         VnpTransactionNo = COALESCE(?, VnpTransactionNo),
-         VnpBankCode = COALESCE(?, VnpBankCode),
-         VnpBankTranNo = COALESCE(?, VnpBankTranNo),
-         VnpCardType = COALESCE(?, VnpCardType),
-         VnpResponseCode = COALESCE(?, VnpResponseCode),
-         VnpTransactionStatus = COALESCE(?, VnpTransactionStatus),
-         VnpPayDate = COALESCE(?, VnpPayDate),
-         NeedReconcile = ?,
-         ReconcileNote = COALESCE(?, ReconcileNote),
-         RawIpnPayload = COALESCE(?, RawIpnPayload),
-         IpnReceivedAt = ${ipnTimeExpr},
-         ProcessedAt = NOW()
-     WHERE PaymentTransactionID = ?`,
-    [
-      status,
-      vnpTransactionNo,
-      vnpBankCode,
-      vnpBankTranNo,
-      vnpCardType,
-      vnpResponseCode,
-      vnpTransactionStatus,
-      vnpPayDate,
-      needReconcile ? 1 : 0,
-      reconcileNote,
-      rawIpnPayload,
-      paymentTransactionId,
-    ]
-  );
-  return result.affectedRows;
-};
-
-/**
- * Cập nhật thời điểm gọi querydr gần nhất.
- */
-const updateTransactionLastQueryAt = async (paymentTransactionId, conn = pool) => {
-  await conn.execute(
-    `UPDATE paymenttransaction SET LastQueryAt = NOW() WHERE PaymentTransactionID = ?`,
-    [paymentTransactionId]
-  );
-};
-
-/**
- * Lấy danh sách PaymentTransaction (lịch sử giao dịch VNPay) theo InvoiceID hoặc bộ lọc chi nhánh/trạng thái.
- */
-const findVnpayTransactions = async ({ invoiceId = null, branchId = null, status = null, needReconcile = null } = {}) => {
+const findVnpayTransactions = async ({ invoiceId = null, branchId = null, status = null } = {}) => {
   let sql = `
-    SELECT pt.PaymentTransactionID, pt.PaymentID, pt.InvoiceID, pt.Provider, pt.VnpTxnRef,
-           pt.Amount, pt.AmountVnp, pt.Status, pt.VnpTransactionNo, pt.VnpBankCode,
-           pt.VnpCardType, pt.VnpResponseCode, pt.VnpTransactionStatus, pt.VnpPayDate,
-           pt.NeedReconcile, pt.ReconcileNote, pt.IpnReceivedAt, pt.ProcessedAt, pt.LastQueryAt, pt.CreatedAt,
+    SELECT p.PaymentID AS PaymentTransactionID, p.PaymentID, p.InvoiceID,
+           p.PaymentMethod AS Provider, p.TransactionNo AS VnpTxnRef,
+           p.Amount, p.TransactionNo AS VnpTransactionNo, p.Note AS ReconcileNote,
+           p.PaidAt AS ProcessedAt, p.CreatedAt,
            p.Status AS PaymentStatus, p.PaymentMethod,
+           CASE
+             WHEN p.Status = 1 THEN 'SUCCESS'
+             WHEN p.Status = 2 THEN 'FAILED'
+             ELSE 'PENDING'
+           END AS Status,
            i.InvoiceNumber, i.SessionID, i.BranchID,
            t.Name AS TableName, a.Name AS AreaName
-    FROM paymenttransaction pt
-    INNER JOIN payment p ON pt.PaymentID = p.PaymentID
-    INNER JOIN invoice i ON pt.InvoiceID = i.InvoiceID
+    FROM payment p
+    INNER JOIN invoice i ON p.InvoiceID = i.InvoiceID
     LEFT JOIN session s ON i.SessionID = s.SessionID
     LEFT JOIN \`table\` t ON s.TableID = t.TableID
     LEFT JOIN area a ON t.AreaID = a.AreaID
-    WHERE 1 = 1
+    WHERE p.PaymentMethod IN ('MOMO', 'VNPAY', 'BANK_TRANSFER')
   `;
   const params = [];
 
   if (invoiceId) {
-    sql += ' AND pt.InvoiceID = ?';
+    sql += ' AND p.InvoiceID = ?';
     params.push(invoiceId);
   }
   if (branchId) {
@@ -319,15 +307,12 @@ const findVnpayTransactions = async ({ invoiceId = null, branchId = null, status
     params.push(branchId);
   }
   if (status) {
-    sql += ' AND pt.Status = ?';
-    params.push(status);
-  }
-  if (needReconcile !== null && needReconcile !== undefined && needReconcile !== '') {
-    sql += ' AND pt.NeedReconcile = ?';
-    params.push(Number(needReconcile) ? 1 : 0);
+    if (status === 'SUCCESS') sql += ' AND p.Status = 1';
+    else if (status === 'FAILED') sql += ' AND p.Status = 2';
+    else if (status === 'PENDING') sql += ' AND p.Status = 0';
   }
 
-  sql += ' ORDER BY pt.PaymentTransactionID DESC LIMIT 100';
+  sql += ' ORDER BY p.PaymentID DESC LIMIT 100';
   const [rows] = await pool.execute(sql, params);
   return rows;
 };
@@ -341,12 +326,10 @@ module.exports = {
   findInvoiceBySessionId,
   findInvoiceDetailByPaymentId,
   findInvoiceLines,
+  saveGatewayTransactionToPayment,
   completePayment,
   markPaymentFailedIfPending,
   findPaymentWithInvoice,
-  createPaymentTransaction,
-  findTransactionWithLockByTxnRef,
-  updatePaymentTransactionResult,
-  updateTransactionLastQueryAt,
+  findPaymentByTxnRef,
   findVnpayTransactions,
 };

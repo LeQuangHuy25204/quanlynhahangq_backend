@@ -70,4 +70,27 @@ const getSessionById = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { qrScan, joinSession, updateSessionStatus, manualOpenSession, getSessionById };
+/**
+ * POST /api/sessions/call-staff
+ * Body: { sessionToken, reason? }
+ */
+const requestStaffSupport = async (req, res, next) => {
+  try {
+    const { sessionToken, reason } = req.body;
+    const data = await sessionService.requestStaffSupport({ sessionToken, reason });
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};
+
+/**
+ * DELETE /api/sessions/:sessionId/call-staff
+ */
+const resolveStaffSupport = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const data = await sessionService.resolveStaffSupport(sessionId, req.user);
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};
+
+module.exports = { qrScan, joinSession, updateSessionStatus, manualOpenSession, getSessionById, requestStaffSupport, resolveStaffSupport };

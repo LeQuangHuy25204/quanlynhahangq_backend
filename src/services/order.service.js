@@ -167,8 +167,7 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
 /**
  * Phục vụ cân món và cập nhật trọng lượng (FR-SRV-05).
  * - Cập nhật Quantity (DECIMAL 10,3).
- * - Đổi trạng thái từ CHỜ CÂN -> ĐANG CHẾ BIẾN.
- * - Gọi giả lập inPhieuBep().
+ * - Đổi trạng thái từ CHỜ CÂN -> ĐÃ XÁC NHẬN (để chuyển sang cột Đã xác nhận chờ In phiếu bếp và chế biến).
  *
  * @param {number} orderLineId
  * @param {number} weight - Trọng lượng thập phân (ví dụ: 1.25)
@@ -208,7 +207,7 @@ const updateOrderLineWeight = async (orderLineId, weight, actorUser) => {
   }
 
   // Cập nhật Database + điều chỉnh chênh lệch tồn kho (nếu món cân có quản lý tồn kho)
-  const newStatus = ORDER_LINE_STATUS.COOKING;
+  const newStatus = ORDER_LINE_STATUS.CONFIRMED;
   const newWeight = parseFloat(weight);
   const oldQty = parseFloat(orderLine.Quantity || 0);
   const delta = oldQty - newWeight; // > 0: cân nhẹ hơn -> hoàn lại; < 0: cân nặng hơn -> trừ thêm
@@ -217,9 +216,6 @@ const updateOrderLineWeight = async (orderLineId, weight, actorUser) => {
   if (delta !== 0 && orderLine.BranchID) {
     await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, delta);
   }
-
-  // [GIẢ LẬP] Gọi hàm in phiếu bếp
-  console.log(`[PRINT_KITCHEN_TICKET] In phiếu bếp cho OrderLineID: ${orderLineId}, Khối lượng: ${weight}`);
 
   return { orderLineId, quantity: parseFloat(weight), status: newStatus };
 };
@@ -384,9 +380,12 @@ const staffRequestPayment = async (orderId, actorUser) => {
 };
 
 /**
- * Phục vụ hủy món (FR-SRV-06).
- * - Không được hủy món đang COOKING (4) hoặc đã CANCELLED (3).
- * - Ghi lý do hủy + ID người hủy.
+ * Hủy món ăn (FR-SRV-06):
+ * - Nhân viên phục vụ (Waiter) & Thu ngân (Cashier):
+ *     + Chỉ được trực tiếp hủy các món ở trạng thái TRƯỚC Đang chế biến (0: Chờ xác nhận, 1: Chờ cân, 2: Đã xác nhận).
+ *     + Nếu món đã ở trạng thái Đang chế biến trở về sau (4: COOKING, 5: READY, 6: SERVED), Phục vụ / Thu ngân KHÔNG được tự ý hủy mà phải gửi yêu cầu cho Quản lý chi nhánh / Quản trị nhà hàng duyệt.
+ * - Quản lý chi nhánh (BranchManager) & Quản trị nhà hàng (RestaurantAdmin):
+ *     + Có quyền hủy món ở cả trạng thái Đang chế biến trở về sau (bắt buộc phải điền lý do hủy).
  */
 const cancelOrderLine = async (orderLineId, cancelReason, actorUser) => {
   const orderLine = await orderModel.findOrderLineById(orderLineId);
@@ -397,12 +396,13 @@ const cancelOrderLine = async (orderLineId, cancelReason, actorUser) => {
   if (orderLine.Status === ORDER_LINE_STATUS.CANCELLED) {
     const err = new Error('Món này đã bị hủy trước đó.'); err.statusCode = 409; throw err;
   }
-  if (orderLine.Status === ORDER_LINE_STATUS.COOKING) {
-    const err = new Error('Không thể hủy món đang trong bếp. Hãy liên hệ bếp trưởng.'); err.statusCode = 409; throw err;
-  }
 
-  // Bảo mật BR-18
   const { ROLE_CODE } = require('../constants/status');
+  const isManager =
+    actorUser.roleCode === ROLE_CODE.BRANCH_MANAGER ||
+    actorUser.roleCode === ROLE_CODE.RESTAURANT_ADMIN;
+
+  // Kiểm tra chi nhánh (BR-18)
   if (actorUser.roleCode !== ROLE_CODE.RESTAURANT_ADMIN) {
     const isBelong = await orderModel.verifyOrderLineBelongsToBranch(orderLineId, actorUser.branchId);
     if (!isBelong) {
@@ -410,15 +410,185 @@ const cancelOrderLine = async (orderLineId, cancelReason, actorUser) => {
     }
   }
 
+  const isCookingOrLater = [
+    ORDER_LINE_STATUS.COOKING,
+    ORDER_LINE_STATUS.READY,
+    ORDER_LINE_STATUS.SERVED,
+  ].includes(orderLine.Status);
+
+  // Nhân viên & Thu ngân chỉ được trực tiếp hủy món TRƯỚC trạng thái Đang chế biến
+  if (isCookingOrLater && !isManager) {
+    const err = new Error(
+      'Nhân viên và Thu ngân chỉ được hủy các món ở trạng thái trước Đang chế biến. Với món đang chế biến trở về sau, cần sự chấp nhận của Quản lý chi nhánh hoặc Quản lý nhà hàng.'
+    );
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const cleanReason = cancelReason
+    ? String(cancelReason).replace(/^\[YC_HUY\]\s*/i, '').trim()
+    : (orderLine.CancelReason ? String(orderLine.CancelReason).replace(/^\[YC_HUY\]\s*/i, '').trim() : '');
+
+  if (!cleanReason) {
+    const err = new Error('Vui lòng nhập lý do hủy món.');
+    err.statusCode = 400;
+    throw err;
+  }
+
   await orderModel.cancelOrderLine(orderLineId, {
     cancelledBy: actorUser.staffId,
-    cancelReason,
+    cancelReason: cleanReason,
   });
   if (orderLine.BranchID) {
     await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, parseFloat(orderLine.Quantity || 0));
   }
 
   return { orderLineId, status: ORDER_LINE_STATUS.CANCELLED, message: 'Đã hủy món thành công.' };
+};
+
+/**
+ * Khách hàng bấm hủy món từ màn hình "Món đã gọi":
+ * - Nếu món đang ở trạng thái Chờ xác nhận (0) hoặc Chờ cân (1): HỦY TRỰC TIẾP luôn (Status = 3) và hoàn trả tồn kho ngay lập tức.
+ * - Nếu món đang ở trạng thái Đã xác nhận (2): Gửi yêu cầu hủy món ([YC_HUY]) xuống bàn để nhân viên phục vụ xác nhận.
+ * - Nếu món đang ở trạng thái Đang chế biến (4), Chờ phục vụ (5) hoặc Đã phục vụ (6): Trả về thông báo tùy theo trạng thái và không thể hủy.
+ */
+const customerRequestCancelLine = async (orderLineId, { sessionToken, cancelReason }) => {
+  if (!sessionToken) {
+    const err = new Error('Thiếu sessionToken xác thực phiên bàn.'); err.statusCode = 401; throw err;
+  }
+
+  const orderLine = await orderModel.findOrderLineById(orderLineId);
+  if (!orderLine) {
+    const err = new Error('Không tìm thấy món ăn.'); err.statusCode = 404; throw err;
+  }
+
+  if (orderLine.SessionToken !== sessionToken) {
+    const err = new Error('Bạn không có quyền thao tác trên phiên bàn này.'); err.statusCode = 403; throw err;
+  }
+
+  if (orderLine.SessionStatus !== SESSION_STATUS.OPEN) {
+    const err = new Error('Phiên bàn đã đóng, không thể hủy món.'); err.statusCode = 409; throw err;
+  }
+
+  if (orderLine.Status === ORDER_LINE_STATUS.CANCELLED) {
+    const err = new Error('Món này đã được hủy.'); err.statusCode = 409; throw err;
+  }
+
+  if (orderLine.Status === ORDER_LINE_STATUS.COOKING) {
+    const err = new Error(`Món "${orderLine.MenuItemName}" hiện đang được bếp chế biến nên không thể hủy!`);
+    err.statusCode = 409;
+    throw err;
+  }
+  if (orderLine.Status === ORDER_LINE_STATUS.READY) {
+    const err = new Error(`Món "${orderLine.MenuItemName}" đã chế biến xong và đang chờ mang ra bàn nên không thể hủy!`);
+    err.statusCode = 409;
+    throw err;
+  }
+  if (orderLine.Status === ORDER_LINE_STATUS.SERVED) {
+    const err = new Error(`Món "${orderLine.MenuItemName}" đã được phục vụ ra bàn nên không thể hủy!`);
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const reasonText = String(cancelReason || 'Khách tự hủy món').replace(/^\[YC_HUY\]\s*/i, '').trim();
+
+  // Trạng thái Chờ xác nhận (0) hoặc Chờ cân (1) -> Khách hàng được HỦY TRỰC TIẾP luôn
+  if (
+    orderLine.Status === ORDER_LINE_STATUS.WAITING_CONFIRM ||
+    orderLine.Status === ORDER_LINE_STATUS.WAITING_WEIGH
+  ) {
+    await orderModel.cancelOrderLine(orderLineId, {
+      cancelledBy: null,
+      cancelReason: reasonText || 'Khách tự hủy món khi chờ xác nhận',
+    });
+    if (orderLine.BranchID) {
+      await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, parseFloat(orderLine.Quantity || 0));
+    }
+
+    return {
+      orderLineId: Number(orderLineId),
+      cancelledDirectly: true,
+      status: ORDER_LINE_STATUS.CANCELLED,
+      message: `Đã hủy món "${orderLine.MenuItemName}" thành công!`,
+    };
+  }
+
+  // Trạng thái Đã xác nhận (2) -> Gửi yêu cầu hủy để nhân viên tại bàn kiểm tra và duyệt
+  const taggedReason = `[YC_HUY] ${reasonText}`.slice(0, 500);
+  await orderModel.setOrderLineCancelRequest(orderLineId, taggedReason);
+
+  return {
+    orderLineId: Number(orderLineId),
+    cancelRequested: true,
+    cancelReason: taggedReason,
+    message: `Đã gửi yêu cầu hủy món "${orderLine.MenuItemName}" tới nhân viên phục vụ.`,
+  };
+};
+
+/**
+ * Nhân viên / Thu ngân gửi yêu cầu lên Quản lý chi nhánh / Quản lý nhà hàng để xin duyệt hủy món
+ * đang ở trạng thái Đang chế biến trở về sau (kèm lý do bắt buộc).
+ */
+const staffRequestManagerCancelLine = async (orderLineId, cancelReason, actorUser) => {
+  const orderLine = await orderModel.findOrderLineById(orderLineId);
+  if (!orderLine) {
+    const err = new Error('Không tìm thấy dòng món ăn.'); err.statusCode = 404; throw err;
+  }
+
+  if (orderLine.Status === ORDER_LINE_STATUS.CANCELLED) {
+    const err = new Error('Món này đã được hủy.'); err.statusCode = 409; throw err;
+  }
+
+  const { ROLE_CODE } = require('../constants/status');
+  if (actorUser.roleCode !== ROLE_CODE.RESTAURANT_ADMIN) {
+    const isBelong = await orderModel.verifyOrderLineBelongsToBranch(orderLineId, actorUser.branchId);
+    if (!isBelong) {
+      const err = new Error('Bạn không có quyền thao tác trên món của chi nhánh khác.'); err.statusCode = 403; throw err;
+    }
+  }
+
+  const reasonText = String(cancelReason || '').replace(/^\[YC_HUY\]\s*/i, '').trim();
+  if (!reasonText) {
+    const err = new Error('Vui lòng điền lý do xin hủy món để trình Quản lý duyệt.'); err.statusCode = 400; throw err;
+  }
+
+  const staffLabel = actorUser.fullName || actorUser.username || 'NV';
+  const taggedReason = `[YC_HUY] (${staffLabel} xin Quản lý duyệt hủy) ${reasonText}`.slice(0, 500);
+  await orderModel.setOrderLineCancelRequest(orderLineId, taggedReason);
+
+  return {
+    orderLineId: Number(orderLineId),
+    cancelRequested: true,
+    cancelReason: taggedReason,
+    message: 'Đã gửi yêu cầu hủy món kèm lý do lên Quản lý chi nhánh / Quản lý nhà hàng duyệt.',
+  };
+};
+
+/**
+ * Nhân viên hoặc Quản lý từ chối yêu cầu hủy món (giữ nguyên món).
+ * Nếu món đang ở trạng thái Đang chế biến trở về sau, chỉ Quản lý mới được duyệt/từ chối yêu cầu hủy.
+ */
+const rejectCancelRequestLine = async (orderLineId, actorUser) => {
+  const orderLine = await orderModel.findOrderLineById(orderLineId);
+  if (!orderLine) {
+    const err = new Error('Không tìm thấy dòng món ăn.'); err.statusCode = 404; throw err;
+  }
+
+  const { ROLE_CODE } = require('../constants/status');
+  if (actorUser.roleCode !== ROLE_CODE.RESTAURANT_ADMIN) {
+    const isBelong = await orderModel.verifyOrderLineBelongsToBranch(orderLineId, actorUser.branchId);
+    if (!isBelong) {
+      const err = new Error('Bạn không có quyền thao tác trên món của chi nhánh khác.'); err.statusCode = 403; throw err;
+    }
+  }
+
+  await orderModel.setOrderLineCancelRequest(orderLineId, null);
+
+  return {
+    orderLineId: Number(orderLineId),
+    cancelRequested: false,
+    message: 'Đã từ chối yêu cầu hủy món và giữ nguyên món.',
+  };
 };
 
 const getOrderLinesBySession = async (sessionId) => {
@@ -478,4 +648,4 @@ const trackOrderByToken = async (sessionToken) => {
   };
 };
 
-module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, prepareSessionForPayment, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
+module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, prepareSessionForPayment, requestPayment, staffRequestPayment, cancelOrderLine, customerRequestCancelLine, staffRequestManagerCancelLine, rejectCancelRequestLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };

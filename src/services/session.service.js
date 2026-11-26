@@ -355,6 +355,64 @@ const getSessionById = async (sessionId, participantId = null) => {
   };
 };
 
-module.exports = { processQRScan, joinSession, updateSessionStatus, manualOpenSession, getSessionById };
+/**
+ * Khách hàng bấm nút "Gọi nhân viên" từ điện thoại để yêu cầu nhân viên tới bàn hỗ trợ.
+ */
+const requestStaffSupport = async ({ sessionToken, reason }) => {
+  if (!sessionToken) {
+    const err = new Error('Thiếu sessionToken xác thực phiên bàn.');
+    err.statusCode = 401;
+    throw err;
+  }
+  const session = await sessionModel.findSessionByToken(sessionToken);
+  if (!session) {
+    const err = new Error('Phiên bàn không tồn tại.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (session.Status !== SESSION_STATUS.OPEN) {
+    const err = new Error('Chỉ có thể gọi nhân viên khi bàn đang phục vụ.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const res = await sessionModel.createSupportRequest(
+    session.SessionID,
+    reason || 'Khách cần nhân viên hỗ trợ tại bàn'
+  );
+  return {
+    sessionId: session.SessionID,
+    tableName: session.TableName,
+    needSupport: true,
+    supportNote: res.note,
+    message: 'Đã gửi thông báo gọi nhân viên! Nhân viên sẽ đến bàn hỗ trợ bạn ngay.',
+  };
+};
+
+/**
+ * Nhân viên xác nhận đã hỗ trợ khách tại bàn (tắt chuông báo hỗ trợ trên sơ đồ bàn).
+ */
+const resolveStaffSupport = async (sessionId, actorUser) => {
+  const session = await sessionModel.findSessionById(sessionId);
+  if (!session) {
+    const err = new Error('Không tìm thấy phiên bàn.');
+    err.statusCode = 404;
+    throw err;
+  }
+  const { ROLE_CODE } = require('../constants/status');
+  if (actorUser.roleCode !== ROLE_CODE.RESTAURANT_ADMIN && session.BranchID !== actorUser.branchId) {
+    const err = new Error('Bạn không có quyền thao tác trên bàn của chi nhánh khác.');
+    err.statusCode = 403;
+    throw err;
+  }
+  await sessionModel.clearSupportRequest(sessionId);
+  return {
+    sessionId: Number(sessionId),
+    needSupport: false,
+    message: `Đã xác nhận hỗ trợ xong cho ${session.TableName}.`,
+  };
+};
+
+module.exports = { processQRScan, joinSession, updateSessionStatus, manualOpenSession, getSessionById, requestStaffSupport, resolveStaffSupport };
 
 

@@ -1,10 +1,8 @@
 'use strict';
 
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 
-// Thiết lập biến môi trường test Sandbox mẫu (không phải secret thật)
 process.env.NODE_ENV = 'test';
 process.env.VNP_TMN_CODE = 'TESTTMN01';
 process.env.VNP_HASH_SECRET = 'TEST_SANDBOX_SECRET_KEY_32_CHARS_MINIMUM';
@@ -13,6 +11,10 @@ process.env.VNP_API_URL = 'https://sandbox.vnpayment.vn/merchant_webapi/api/tran
 process.env.VNP_RETURN_URL = 'http://localhost:3000/api/payments/vnpay/return';
 process.env.VNP_FRONTEND_RETURN_URL = 'http://localhost:5173/customer/payment-result';
 process.env.VNP_PENDING_TIMEOUT_MINUTES = '15';
+process.env.VIETQR_BANK_ID = 'MBBank';
+process.env.VIETQR_ACCOUNT_NO = 'VQRQANXJH4626';
+process.env.VIETQR_ACCOUNT_NAME = 'LE QUANG HUY';
+process.env.SEPAY_WEBHOOK_API_KEY = 'BBQ_KLTN_SEPAY_2026_2027';
 
 const vnpayService = require('../src/services/vnpay.service');
 const paymentService = require('../src/services/payment.service');
@@ -32,39 +34,27 @@ const signParams = (params, secret = process.env.VNP_HASH_SECRET) => {
   return vnpayService.signHmacSha512(signData, secret);
 };
 
-// In-memory transactional store mô phỏng MySQL InnoDB + Row Lock (FOR UPDATE)
+// In-memory transactional store mô phỏng MySQL InnoDB trên bảng payment gốc (18 bảng chuẩn)
 const createMockDb = ({ failOnCompletePayment = false } = {}) => {
   const state = {
     sessions: new Map([[10, { SessionID: 10, Status: SESSION_STATUS.OPEN, SessionToken: 'tok-valid-10' }]]),
     invoices: new Map([[100, { InvoiceID: 100, SessionID: 10, InvoiceNumber: 'INV-20261121-000100', TotalAmount: '350000.00' }]]),
-    payments: new Map([[200, { PaymentID: 200, InvoiceID: 100, Amount: '350000.00', PaymentMethod: 'VNPAY', Status: PAYMENT_STATUS.PENDING, TransactionNo: null, PaidAt: null }]]),
-    transactions: new Map([
-      ['VNP200_TX1', {
-        PaymentTransactionID: 1,
+    payments: new Map([
+      [200, {
         PaymentID: 200,
         InvoiceID: 100,
-        VnpTxnRef: 'VNP200_TX1',
         Amount: '350000.00',
-        AmountVnp: '35000000',
-        Status: VNPAY_TX_STATUS.PENDING,
-        VnpTransactionNo: null,
-        NeedReconcile: 0,
-        ReconcileNote: null,
-        CreatedAt: new Date(),
+        PaymentMethod: 'VNPAY',
+        Status: PAYMENT_STATUS.PENDING,
+        TransactionNo: 'VNP200_TX1',
+        Note: '[REF:VNP200_TX1] Thanh toan hoa don INV-20261121-000100',
+        PaidAt: null,
       }],
-      ['VNP200_TX2', {
-        PaymentTransactionID: 2,
-        PaymentID: 200,
-        InvoiceID: 100,
-        VnpTxnRef: 'VNP200_TX2',
-        Amount: '350000.00',
-        AmountVnp: '35000000',
-        Status: VNPAY_TX_STATUS.PENDING,
-        VnpTransactionNo: null,
-        NeedReconcile: 0,
-        ReconcileNote: null,
-        CreatedAt: new Date(),
-      }],
+    ]),
+    refMap: new Map([
+      ['VNP200_TX1', 200],
+      ['VNP200_TX2', 200],
+      ['BBQ200', 200],
     ]),
     paidCount: 0,
   };
@@ -84,11 +74,9 @@ const createMockDb = ({ failOnCompletePayment = false } = {}) => {
           await prev;
           releaseLock = nextResolve;
 
-          // Snapshot để rollback chính xác nếu có lỗi DB
           workingSnapshot = {
             sessions: new Map([...state.sessions].map(([k, v]) => [k, { ...v }])),
             payments: new Map([...state.payments].map(([k, v]) => [k, { ...v }])),
-            transactions: new Map([...state.transactions].map(([k, v]) => [k, { ...v }])),
             paidCount: state.paidCount,
           };
         },
@@ -99,7 +87,6 @@ const createMockDb = ({ failOnCompletePayment = false } = {}) => {
           if (workingSnapshot) {
             state.sessions = workingSnapshot.sessions;
             state.payments = workingSnapshot.payments;
-            state.transactions = workingSnapshot.transactions;
             state.paidCount = workingSnapshot.paidCount;
             workingSnapshot = null;
           }
@@ -115,45 +102,43 @@ const createMockDb = ({ failOnCompletePayment = false } = {}) => {
   };
 
   const mockPaymentModel = {
-    async findTransactionWithLockByTxnRef(txnRef) {
-      const tx = state.transactions.get(txnRef);
-      if (!tx) return null;
-      const payment = state.payments.get(tx.PaymentID);
-      const invoice = state.invoices.get(tx.InvoiceID);
+    async findPaymentByTxnRef(txnRef) {
+      const paymentId = state.refMap.get(txnRef);
+      if (!paymentId) return null;
+      const payment = state.payments.get(paymentId);
+      const invoice = state.invoices.get(payment.InvoiceID);
       const session = state.sessions.get(invoice.SessionID);
       return {
-        ...tx,
+        PaymentID: payment.PaymentID,
+        InvoiceID: payment.InvoiceID,
+        Amount: payment.Amount,
+        AmountVnp: String(Math.round(Number(payment.Amount) * 100)),
+        VnpTxnRef: txnRef,
         PaymentStatus: payment.Status,
         PaymentMethod: payment.PaymentMethod,
+        TransactionNo: payment.TransactionNo,
+        Note: payment.Note,
+        Status:
+          payment.Status === PAYMENT_STATUS.PAID
+            ? VNPAY_TX_STATUS.SUCCESS
+            : payment.Status === PAYMENT_STATUS.FAILED
+            ? VNPAY_TX_STATUS.FAILED
+            : VNPAY_TX_STATUS.PENDING,
         InvoiceNumber: invoice.InvoiceNumber,
         SessionID: invoice.SessionID,
         SessionStatus: session.Status,
       };
     },
-    async updatePaymentTransactionResult(txId, data) {
-      for (const tx of state.transactions.values()) {
-        if (tx.PaymentTransactionID === txId) {
-          tx.Status = data.status;
-          tx.VnpTransactionNo = data.vnpTransactionNo || tx.VnpTransactionNo;
-          tx.VnpBankCode = data.vnpBankCode || null;
-          tx.VnpResponseCode = data.vnpResponseCode || null;
-          tx.NeedReconcile = data.needReconcile ? 1 : 0;
-          tx.ReconcileNote = data.reconcileNote || null;
-          tx.ProcessedAt = new Date();
-          return 1;
-        }
-      }
-      return 0;
-    },
-    async markPaymentFailedIfPending(paymentId) {
+    async markPaymentFailedIfPending(paymentId, note) {
       const p = state.payments.get(paymentId);
       if (p && p.Status === PAYMENT_STATUS.PENDING) {
         p.Status = PAYMENT_STATUS.FAILED;
+        p.Note = note || p.Note;
         return 1;
       }
       return 0;
     },
-    async completePayment(paymentId, status, transactionNo, paymentMethod) {
+    async completePayment(paymentId, status, transactionNo, paymentMethod, note) {
       if (failOnCompletePayment) {
         throw new Error('Simulated DB write failure during completePayment');
       }
@@ -161,6 +146,7 @@ const createMockDb = ({ failOnCompletePayment = false } = {}) => {
       p.Status = status;
       p.TransactionNo = transactionNo;
       p.PaymentMethod = paymentMethod;
+      p.Note = note || p.Note;
       p.PaidAt = new Date();
       state.paidCount += 1;
       return 1;
@@ -178,7 +164,7 @@ const createMockDb = ({ failOnCompletePayment = false } = {}) => {
   return { state, mockPool, mockPaymentModel, mockSessionModel };
 };
 
-describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
+describe('VNPay & SePay Integration & Security Tests (16 Scenarios)', () => {
   it('1. Tính toán và đối chiếu số tiền bằng số nguyên BigInt (không dùng float) & ký HMAC-SHA512 chuẩn 2.1.0', () => {
     const amountVnp = vnpayService.parseAmountToVnpInt('350000.00');
     assert.equal(amountVnp, 35000000n);
@@ -197,7 +183,6 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
     assert.equal(parsed.searchParams.get('vnp_IpAddr'), '127.0.0.1');
     assert.ok(parsed.searchParams.get('vnp_SecureHash'));
 
-    // Kiểm tra verifySignature thành công và phát hiện bị sửa tham số
     const paramsObj = Object.fromEntries(parsed.searchParams.entries());
     assert.equal(vnpayService.verifySignature(paramsObj), true);
     assert.equal(vnpayService.verifySignature({ ...paramsObj, vnp_Amount: '100' }), false);
@@ -233,8 +218,8 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
     }, 'IPN', { pool: mockPool, paymentModel: mockPaymentModel, sessionModel: mockSessionModel });
 
     assert.equal(res.RspCode, '00');
-    assert.equal(state.transactions.get('VNP200_TX1').Status, VNPAY_TX_STATUS.SUCCESS);
     assert.equal(state.payments.get(200).Status, PAYMENT_STATUS.PAID);
+    assert.equal(state.payments.get(200).TransactionNo, '14567890');
     assert.equal(state.sessions.get(10).Status, SESSION_STATUS.CLOSED);
     assert.equal(state.paidCount, 1);
   });
@@ -250,7 +235,7 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
     }, 'IPN', { pool: mockPool, paymentModel: mockPaymentModel, sessionModel: mockSessionModel });
 
     assert.equal(res.RspCode, '00');
-    assert.equal(state.transactions.get('VNP200_TX1').Status, VNPAY_TX_STATUS.CANCELLED);
+    assert.equal(res.resultStatus, VNPAY_TX_STATUS.CANCELLED);
     assert.equal(state.payments.get(200).Status, PAYMENT_STATUS.FAILED);
     assert.equal(state.sessions.get(10).Status, SESSION_STATUS.OPEN);
   });
@@ -266,7 +251,8 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
     }, 'IPN', { pool: mockPool, paymentModel: mockPaymentModel, sessionModel: mockSessionModel });
 
     assert.equal(res.RspCode, '00');
-    assert.equal(state.transactions.get('VNP200_TX1').Status, VNPAY_TX_STATUS.FAILED);
+    assert.equal(res.resultStatus, VNPAY_TX_STATUS.FAILED);
+    assert.equal(state.payments.get(200).Status, PAYMENT_STATUS.FAILED);
     assert.equal(state.sessions.get(10).Status, SESSION_STATUS.OPEN);
   });
 
@@ -329,9 +315,8 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
     assert.equal(state.paidCount, 1);
   });
 
-  it('10. IPN giao dịch cũ đến sau khi giao dịch mới được tạo & hai giao dịch cùng báo thành công cho 1 Invoice', async () => {
+  it('10. IPN giao dịch cũ đến sau khi giao dịch mới đã thanh toán -> trả RspCode 02, không ghi trùng doanh thu', async () => {
     const { state, mockPool, mockPaymentModel, mockSessionModel } = createMockDb();
-    // Giao dịch mới TX2 thành công trước
     const resTx2 = await paymentService.processVnpayResultInTransaction({
       vnp_TmnCode: 'TESTTMN01',
       vnp_TxnRef: 'VNP200_TX2',
@@ -341,9 +326,7 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
       vnp_TransactionNo: 'VNP_NEW_2',
     }, 'IPN', { pool: mockPool, paymentModel: mockPaymentModel, sessionModel: mockSessionModel });
     assert.equal(resTx2.RspCode, '00');
-    assert.equal(state.transactions.get('VNP200_TX2').Status, VNPAY_TX_STATUS.SUCCESS);
 
-    // IPN của giao dịch cũ TX1 đến trễ và cũng báo thành công (00/00)
     const resTx1 = await paymentService.processVnpayResultInTransaction({
       vnp_TmnCode: 'TESTTMN01',
       vnp_TxnRef: 'VNP200_TX1',
@@ -353,10 +336,8 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
       vnp_TransactionNo: 'VNP_OLD_1',
     }, 'IPN', { pool: mockPool, paymentModel: mockPaymentModel, sessionModel: mockSessionModel });
 
-    assert.equal(resTx1.RspCode, '00');
-    assert.equal(state.transactions.get('VNP200_TX1').Status, VNPAY_TX_STATUS.DUPLICATE_CONFLICT);
-    assert.equal(state.transactions.get('VNP200_TX1').NeedReconcile, 1);
-    assert.equal(state.paidCount, 1); // Chỉ ghi nhận doanh thu đúng 1 lần!
+    assert.equal(resTx1.RspCode, '02');
+    assert.equal(state.paidCount, 1);
   });
 
   it('11. IPN gửi đồng thời nhiều request -> chỉ 1 request chốt thành công, request còn lại trả 02', async () => {
@@ -400,8 +381,6 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
       /Simulated DB write failure/
     );
 
-    // Đảm bảo rollback hoàn toàn về trạng thái PENDING ban đầu
-    assert.equal(state.transactions.get('VNP200_TX1').Status, VNPAY_TX_STATUS.PENDING);
     assert.equal(state.payments.get(200).Status, PAYMENT_STATUS.PENDING);
     assert.equal(state.sessions.get(10).Status, SESSION_STATUS.OPEN);
   });
@@ -445,8 +424,8 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
 
   it('15. Return URL chỉ đọc trạng thái để hiển thị, không tự chốt PAID khi IPN chưa đến', async () => {
     const paymentModel = require('../src/models/payment.model');
-    const originalFind = paymentModel.findTransactionWithLockByTxnRef;
-    paymentModel.findTransactionWithLockByTxnRef = async () => ({
+    const originalFind = paymentModel.findPaymentByTxnRef;
+    paymentModel.findPaymentByTxnRef = async () => ({
       VnpTxnRef: 'VNP200_TX1',
       Status: VNPAY_TX_STATUS.PENDING,
       PaymentStatus: PAYMENT_STATUS.PENDING,
@@ -470,7 +449,33 @@ describe('VNPay Sandbox Integration & Security Tests (20 Scenarios)', () => {
       assert.equal(res.status, VNPAY_TX_STATUS.PENDING);
       assert.equal(res.paymentStatus, PAYMENT_STATUS.PENDING);
     } finally {
-      paymentModel.findTransactionWithLockByTxnRef = originalFind;
+      paymentModel.findPaymentByTxnRef = originalFind;
     }
+  });
+
+  it('16. SePay Webhook xác nhận chuyển khoản VietQR MB Bank (VA VQRQANXJH4626) -> Payment PAID, Session CLOSED', async () => {
+    const { state, mockPool, mockPaymentModel, mockSessionModel } = createMockDb();
+    const res = await paymentService.handleSepayWebhook(
+      'Apikey BBQ_KLTN_SEPAY_2026_2027',
+      {
+        id: 55110999,
+        gateway: 'MBBank',
+        accountNumber: '0353446554',
+        subAccount: 'VQRQANXJH4626',
+        transferType: 'in',
+        transferAmount: 350000,
+        content: 'MBVCB.123456.BBQ200 chuyen tien',
+        referenceCode: 'FT26330999999',
+      },
+      { pool: mockPool, paymentModel: mockPaymentModel, sessionModel: mockSessionModel }
+    );
+
+    assert.equal(res.matched, true);
+    assert.equal(res.success, true);
+    assert.equal(res.txnRef, 'BBQ200');
+    assert.equal(state.payments.get(200).Status, PAYMENT_STATUS.PAID);
+    assert.equal(state.payments.get(200).PaymentMethod, PAYMENT_METHOD.BANK_TRANSFER);
+    assert.equal(state.payments.get(200).TransactionNo, 'FT26330999999');
+    assert.equal(state.sessions.get(10).Status, SESSION_STATUS.CLOSED);
   });
 });

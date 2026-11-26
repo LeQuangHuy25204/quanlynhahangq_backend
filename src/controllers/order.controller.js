@@ -87,6 +87,32 @@ const cancelOrderLine = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const customerRequestCancelLine = async (req, res, next) => {
+  try {
+    const { orderLineId } = req.params;
+    const { sessionToken, cancelReason } = req.body;
+    const data = await orderService.customerRequestCancelLine(orderLineId, { sessionToken, cancelReason });
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};
+
+const staffRequestManagerCancelLine = async (req, res, next) => {
+  try {
+    const { orderLineId } = req.params;
+    const { cancelReason } = req.body;
+    const data = await orderService.staffRequestManagerCancelLine(orderLineId, cancelReason, req.user);
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};
+
+const rejectCancelRequestLine = async (req, res, next) => {
+  try {
+    const { orderLineId } = req.params;
+    const data = await orderService.rejectCancelRequestLine(orderLineId, req.user);
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};
+
 const getOrderLinesBySession = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
@@ -112,4 +138,4 @@ const trackOrderByToken = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
+module.exports = { placeOrder, staffAddItems, updateOrderLineWeight, updateOrderLineStatus, requestPayment, staffRequestPayment, cancelOrderLine, customerRequestCancelLine, staffRequestManagerCancelLine, rejectCancelRequestLine, getOrderLinesBySession, getOrdersByBranch, trackOrderByToken };
