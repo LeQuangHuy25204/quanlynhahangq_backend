@@ -1,9 +1,16 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { runMigrations } = require('../sql/run_migration');
 const { startServer } = require('../server');
+
+const expectedMigrations = fs
+  .readdirSync(path.join(__dirname, '../sql/migrations'))
+  .filter((f) => f.endsWith('.sql'))
+  .sort();
 
 const createMockDb = (initialApplied = []) => {
   const appliedSet = new Set(initialApplied);
@@ -39,11 +46,8 @@ test('runMigrations runs all pending SQL files in order and skips already applie
   const mockDb = createMockDb();
 
   const firstRun = await runMigrations({ createConnection: mockDb.createConnection });
-  assert.deepEqual(firstRun.applied, [
-    '001_vnpay_payment_transaction.sql',
-    '002_branch_menu_stock.sql',
-    '003_seed_promotions.sql',
-  ]);
+  assert.ok(expectedMigrations.includes('003_seed_promotions.sql'));
+  assert.deepEqual(firstRun.applied, expectedMigrations);
   assert.deepEqual(firstRun.skipped, []);
   assert.equal(mockDb.isClosed(), true);
   assert.ok(mockDb.executedSql[0].includes('CREATE TABLE IF NOT EXISTS `schema_migrations`'));
@@ -51,23 +55,15 @@ test('runMigrations runs all pending SQL files in order and skips already applie
   const secondDb = createMockDb(firstRun.applied);
   const secondRun = await runMigrations({ createConnection: secondDb.createConnection });
   assert.deepEqual(secondRun.applied, []);
-  assert.deepEqual(secondRun.skipped, [
-    '001_vnpay_payment_transaction.sql',
-    '002_branch_menu_stock.sql',
-    '003_seed_promotions.sql',
-  ]);
+  assert.deepEqual(secondRun.skipped, expectedMigrations);
   assert.equal(secondDb.isClosed(), true);
 });
 
 test('runMigrations with force=true re-applies migrations and closes connection on error', async () => {
-  const mockDb = createMockDb([
-    '001_vnpay_payment_transaction.sql',
-    '002_branch_menu_stock.sql',
-    '003_seed_promotions.sql',
-  ]);
+  const mockDb = createMockDb(expectedMigrations);
 
   const forcedRun = await runMigrations({ force: true, createConnection: mockDb.createConnection });
-  assert.equal(forcedRun.applied.length, 3);
+  assert.equal(forcedRun.applied.length, expectedMigrations.length);
   assert.deepEqual(forcedRun.skipped, []);
   assert.equal(mockDb.isClosed(), true);
 
