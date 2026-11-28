@@ -18,9 +18,13 @@ const tableRoutes    = require('./routes/table.routes');
 const promotionRoutes = require('./routes/promotion.routes');
 const reportRoutes   = require('./routes/report.routes');
 const branchRoutes   = require('./routes/branch.routes');
+const activityLogRoutes = require('./routes/activityLog.routes');
+const { requestContextMiddleware } = require('./utils/requestContext');
 const app = express();
 
 // ── Global Middlewares ────────────────────────────────────────
+app.set('trust proxy', 1);
+app.use(requestContextMiddleware);
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginResourcePolicy: false,
@@ -48,6 +52,7 @@ app.use('/api/tables',   tableRoutes);
 app.use('/api/promotions', promotionRoutes);
 app.use('/api/reports',  reportRoutes);
 app.use('/api/branches', branchRoutes);
+app.use('/api/activity-logs', activityLogRoutes);
 
 // ── Serve Frontend Static SPA (Production / Cloud) ────────────
 const publicDir = path.join(__dirname, '../public');

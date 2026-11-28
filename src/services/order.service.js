@@ -4,7 +4,8 @@ const { pool }   = require('../config/db');
 const orderModel   = require('../models/order.model');
 const menuModel    = require('../models/menu.model');
 const sessionModel = require('../models/session.model');
-const { ORDER_STATUS, ORDER_LINE_STATUS, SESSION_STATUS } = require('../constants/status');
+const activityLogService = require('./activityLog.service');
+const { ORDER_STATUS, ORDER_LINE_STATUS, SESSION_STATUS, LOG_SEVERITY } = require('../constants/status');
 
 /**
  * Đặt món — luồng nghiệp vụ cốt lõi.
@@ -22,7 +23,7 @@ const { ORDER_STATUS, ORDER_LINE_STATUS, SESSION_STATUS } = require('../constant
  *   - branchId:      number   ← cách ly chi nhánh
  *   - items:         [{ menuItemId, quantity, note? }]
  */
-const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
+const placeOrder = async ({ sessionToken, participantId, items, branchId, actorOverride = null }) => {
   if (!sessionToken || !participantId || !items || items.length === 0 || !branchId) {
     const err = new Error('sessionToken, participantId, branchId và items là bắt buộc.');
     err.statusCode = 400;
@@ -140,9 +141,10 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
       orderIdToUse = activeOrder.OrderID;
     } else {
       const { orderId } = await orderModel.createOrder({
-        sessionId:     session.SessionID,
-        participantId: parseInt(participantId, 10),
-        status:        ORDER_STATUS.PENDING,
+        sessionId:        session.SessionID,
+        participantId:    parseInt(participantId, 10),
+        status:           ORDER_STATUS.PENDING,
+        createdByStaffId: actorOverride?.staffId ?? null,
       }, conn);
       orderIdToUse = orderId;
     }
@@ -157,6 +159,47 @@ const placeOrder = async ({ sessionToken, participantId, items, branchId }) => {
   }
 
   const finalOrder = await orderModel.findOrderWithLines(orderIdToUse);
+
+  const itemsSummary = orderLinesData.map((l) => ({
+    menuItemId: l.menuItemId,
+    name: l.menuItemName,
+    quantity: Number(l.quantity),
+    unitPrice: l.unitPrice,
+    status: l.status,
+  }));
+  const parsedBranchId = parseInt(branchId, 10);
+
+  if (actorOverride) {
+    await activityLogService.logStaffAction(actorOverride, {
+      branchId: parsedBranchId,
+      entityType: 'Order',
+      entityId: orderIdToUse,
+      action: 'ORDER_STAFF_ADD',
+      severity: LOG_SEVERITY.INFO,
+      description: `Nhân viên thêm ${orderLinesData.length} món vào ${session.TableName || `Phiên #${session.SessionID}`} (Đơn #${orderIdToUse}).`,
+      newValue: { sessionId: session.SessionID, orderId: orderIdToUse, items: itemsSummary },
+    });
+  } else {
+    let guestLabel = null;
+    try {
+      const participants = await sessionModel.getSessionParticipants(session.SessionID);
+      const found = participants.find((p) => Number(p.ParticipantID) === Number(participantId));
+      if (found?.GuestName) guestLabel = `Khách: ${found.GuestName}`;
+    } catch {
+      // Fallback
+    }
+    await activityLogService.logGuestAction({
+      restaurantId,
+      branchId: parsedBranchId,
+      actorName: guestLabel || `Khách tại ${session.TableName || `Phiên #${session.SessionID}`}`,
+      entityType: 'Order',
+      entityId: orderIdToUse,
+      action: 'ORDER_CREATE',
+      severity: LOG_SEVERITY.INFO,
+      description: `Gửi đơn gọi ${orderLinesData.length} món tại ${session.TableName || `Phiên #${session.SessionID}`} (Đơn #${orderIdToUse}).`,
+      newValue: { sessionId: session.SessionID, orderId: orderIdToUse, items: itemsSummary },
+    });
+  }
 
   return {
     order:    finalOrder,
@@ -217,6 +260,17 @@ const updateOrderLineWeight = async (orderLineId, weight, actorUser) => {
     await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, delta);
   }
 
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: orderLine.BranchID,
+    entityType: 'OrderLine',
+    entityId: Number(orderLineId),
+    action: 'ORDER_LINE_WEIGH',
+    severity: LOG_SEVERITY.WARNING,
+    description: `Cân món "${orderLine.MenuItemName}" (#${orderLineId}): ${oldQty} -> ${newWeight} kg.`,
+    oldValue: { menuItemName: orderLine.MenuItemName, quantity: oldQty, status: orderLine.Status },
+    newValue: { menuItemName: orderLine.MenuItemName, quantity: newWeight, status: newStatus },
+  });
+
   return { orderLineId, quantity: parseFloat(weight), status: newStatus };
 };
 
@@ -259,6 +313,18 @@ const updateOrderLineStatus = async (orderLineId, status, actorUser) => {
 
   // Tái sử dụng hàm model hiện có
   await orderModel.updateOrderLineQuantityAndStatus(orderLineId, orderLine.Quantity, parsedStatus);
+
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: orderLine.BranchID,
+    entityType: 'OrderLine',
+    entityId: Number(orderLineId),
+    action: 'ORDER_LINE_STATUS_UPDATE',
+    severity: LOG_SEVERITY.INFO,
+    description: `Cập nhật trạng thái món "${orderLine.MenuItemName}" (#${orderLineId}): ${orderLine.Status} -> ${parsedStatus}.`,
+    oldValue: { menuItemName: orderLine.MenuItemName, status: orderLine.Status },
+    newValue: { menuItemName: orderLine.MenuItemName, status: parsedStatus },
+  });
+
   return { orderLineId, status: parsedStatus, message: 'Cập nhật trạng thái món thành công.' };
 };
 
@@ -315,11 +381,31 @@ const prepareSessionForPayment = async (sessionId, actorUser = null) => {
     l.Status === ORDER_LINE_STATUS.WAITING_CONFIRM || l.Status === ORDER_LINE_STATUS.WAITING_WEIGH
   );
   for (const line of unconfirmed) {
+    const autoReason = 'Món chưa xác nhận khi yêu cầu thanh toán';
     await orderModel.cancelOrderLine(line.OrderLineID, {
       cancelledBy: actorUser?.staffId ?? null,
-      cancelReason: 'Món chưa xác nhận khi yêu cầu thanh toán',
+      cancelReason: autoReason,
     });
     await menuModel.adjustBranchStock(session.BranchID, line.MenuItemID, parseFloat(line.Quantity || 0));
+    const cancelLogPayload = {
+      restaurantId: session.RestaurantID || 1,
+      branchId: session.BranchID,
+      entityType: 'OrderLine',
+      entityId: line.OrderLineID,
+      action: 'ORDER_LINE_CANCEL',
+      severity: LOG_SEVERITY.WARNING,
+      description: `Tự hủy món chưa xác nhận "${line.MenuItemName || `#${line.OrderLineID}`}" khi yêu cầu thanh toán.`,
+      oldValue: { status: line.Status, quantity: parseFloat(line.Quantity || 0) },
+      newValue: { status: ORDER_LINE_STATUS.CANCELLED, cancelReason: autoReason },
+    };
+    if (actorUser) {
+      await activityLogService.logStaffAction(actorUser, cancelLogPayload);
+    } else {
+      await activityLogService.logGuestAction({
+        actorName: `Khách tại ${session.TableName || `Phiên #${sessionId}`}`,
+        ...cancelLogPayload,
+      });
+    }
   }
   return { cancelledCount: unconfirmed.length };
 };
@@ -356,6 +442,20 @@ const requestPayment = async (orderId, sessionToken) => {
   await prepareSessionForPayment(order.SessionID);
   await orderModel.updateAllOrdersStatusInSession(order.SessionID, ORDER_STATUS.WAITING_PAYMENT);
 
+  const sessionInfo = await sessionModel.findSessionById(order.SessionID);
+  await activityLogService.logGuestAction({
+    restaurantId: sessionInfo?.RestaurantID || 1,
+    branchId: sessionInfo?.BranchID || null,
+    actorName: `Khách tại ${sessionInfo?.TableName || `Phiên #${order.SessionID}`}`,
+    entityType: 'Order',
+    entityId: Number(orderId),
+    action: 'PAYMENT_REQUEST',
+    severity: LOG_SEVERITY.INFO,
+    description: `Khách yêu cầu thanh toán tại ${sessionInfo?.TableName || `Phiên #${order.SessionID}`} (Đơn #${orderId}).`,
+    oldValue: { orderStatus: order.Status },
+    newValue: { orderStatus: ORDER_STATUS.WAITING_PAYMENT, sessionId: order.SessionID },
+  });
+
   // [GIẢ LẬP] Bắn socket báo cho thu ngân
   console.log(`[CASHIER_NOTIFY] Bàn có SessionID ${order.SessionID} yêu cầu thanh toán OrderID ${orderId}`);
 
@@ -375,6 +475,19 @@ const staffRequestPayment = async (orderId, actorUser) => {
   }
   const { cancelledCount } = await prepareSessionForPayment(order.SessionID, actorUser);
   await orderModel.updateAllOrdersStatusInSession(order.SessionID, ORDER_STATUS.WAITING_PAYMENT);
+
+  const sessionInfo = await sessionModel.findSessionById(order.SessionID);
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: sessionInfo?.BranchID || actorUser.branchId,
+    entityType: 'Order',
+    entityId: Number(orderId),
+    action: 'PAYMENT_REQUEST',
+    severity: LOG_SEVERITY.INFO,
+    description: `Báo thu ngân thanh toán cho ${sessionInfo?.TableName || `Phiên #${order.SessionID}`} (Đơn #${orderId})${cancelledCount ? `, tự hủy ${cancelledCount} món chưa xác nhận` : ''}.`,
+    oldValue: { orderStatus: order.Status },
+    newValue: { orderStatus: ORDER_STATUS.WAITING_PAYMENT, sessionId: order.SessionID, cancelledUnconfirmed: cancelledCount },
+  });
+
   const suffix = cancelledCount ? ` (đã hủy ${cancelledCount} món chưa xác nhận)` : '';
   return { orderId, status: ORDER_STATUS.WAITING_PAYMENT, cancelledCount, message: `Đã báo thu ngân bàn cần thanh toán${suffix}.` };
 };
@@ -443,6 +556,25 @@ const cancelOrderLine = async (orderLineId, cancelReason, actorUser) => {
     await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, parseFloat(orderLine.Quantity || 0));
   }
 
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: orderLine.BranchID,
+    entityType: 'OrderLine',
+    entityId: Number(orderLineId),
+    action: 'ORDER_LINE_CANCEL',
+    severity: isCookingOrLater ? LOG_SEVERITY.CRITICAL : LOG_SEVERITY.WARNING,
+    description: `Hủy món "${orderLine.MenuItemName}" (#${orderLineId}, SL ${parseFloat(orderLine.Quantity)})${isCookingOrLater ? ' [Sau chế biến]' : ''}. Lý do: ${cleanReason}`,
+    oldValue: {
+      menuItemName: orderLine.MenuItemName,
+      status: orderLine.Status,
+      quantity: parseFloat(orderLine.Quantity),
+      unitPrice: parseFloat(orderLine.UnitPrice),
+    },
+    newValue: {
+      status: ORDER_LINE_STATUS.CANCELLED,
+      cancelReason: cleanReason,
+    },
+  });
+
   return { orderLineId, status: ORDER_LINE_STATUS.CANCELLED, message: 'Đã hủy món thành công.' };
 };
 
@@ -505,6 +637,18 @@ const customerRequestCancelLine = async (orderLineId, { sessionToken, cancelReas
       await menuModel.adjustBranchStock(orderLine.BranchID, orderLine.MenuItemID, parseFloat(orderLine.Quantity || 0));
     }
 
+    await activityLogService.logGuestAction({
+      branchId: orderLine.BranchID,
+      actorName: 'Khách tại bàn',
+      entityType: 'OrderLine',
+      entityId: Number(orderLineId),
+      action: 'ORDER_LINE_CANCEL',
+      severity: LOG_SEVERITY.WARNING,
+      description: `Khách tự hủy món "${orderLine.MenuItemName}" (#${orderLineId}) khi đang chờ xác nhận.`,
+      oldValue: { menuItemName: orderLine.MenuItemName, status: orderLine.Status, quantity: parseFloat(orderLine.Quantity) },
+      newValue: { status: ORDER_LINE_STATUS.CANCELLED, cancelReason: reasonText || 'Khách tự hủy món khi chờ xác nhận' },
+    });
+
     return {
       orderLineId: Number(orderLineId),
       cancelledDirectly: true,
@@ -516,6 +660,17 @@ const customerRequestCancelLine = async (orderLineId, { sessionToken, cancelReas
   // Trạng thái Đã xác nhận (2) -> Gửi yêu cầu hủy để nhân viên tại bàn kiểm tra và duyệt
   const taggedReason = `[YC_HUY] ${reasonText}`.slice(0, 500);
   await orderModel.setOrderLineCancelRequest(orderLineId, taggedReason);
+
+  await activityLogService.logGuestAction({
+    branchId: orderLine.BranchID,
+    actorName: 'Khách tại bàn',
+    entityType: 'OrderLine',
+    entityId: Number(orderLineId),
+    action: 'ORDER_LINE_CANCEL_REQUEST',
+    severity: LOG_SEVERITY.INFO,
+    description: `Khách gửi yêu cầu hủy món "${orderLine.MenuItemName}" (#${orderLineId}): ${reasonText}`,
+    newValue: { menuItemName: orderLine.MenuItemName, status: orderLine.Status, cancelReason: taggedReason },
+  });
 
   return {
     orderLineId: Number(orderLineId),
@@ -556,6 +711,16 @@ const staffRequestManagerCancelLine = async (orderLineId, cancelReason, actorUse
   const taggedReason = `[YC_HUY] (${staffLabel} xin Quản lý duyệt hủy) ${reasonText}`.slice(0, 500);
   await orderModel.setOrderLineCancelRequest(orderLineId, taggedReason);
 
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: orderLine.BranchID,
+    entityType: 'OrderLine',
+    entityId: Number(orderLineId),
+    action: 'ORDER_LINE_CANCEL_REQUEST',
+    severity: LOG_SEVERITY.WARNING,
+    description: `Xin Quản lý duyệt hủy món "${orderLine.MenuItemName}" (#${orderLineId}): ${reasonText}`,
+    newValue: { menuItemName: orderLine.MenuItemName, status: orderLine.Status, cancelReason: taggedReason },
+  });
+
   return {
     orderLineId: Number(orderLineId),
     cancelRequested: true,
@@ -583,6 +748,17 @@ const rejectCancelRequestLine = async (orderLineId, actorUser) => {
   }
 
   await orderModel.setOrderLineCancelRequest(orderLineId, null);
+
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: orderLine.BranchID,
+    entityType: 'OrderLine',
+    entityId: Number(orderLineId),
+    action: 'ORDER_LINE_CANCEL_REJECT',
+    severity: LOG_SEVERITY.WARNING,
+    description: `Từ chối yêu cầu hủy, giữ nguyên món "${orderLine.MenuItemName}" (#${orderLineId}).`,
+    oldValue: { cancelReason: orderLine.CancelReason },
+    newValue: { cancelReason: null },
+  });
 
   return {
     orderLineId: Number(orderLineId),
@@ -621,6 +797,7 @@ const staffAddItems = async (sessionId, items, actorUser) => {
     participantId,
     branchId: session.BranchID,
     items,
+    actorOverride: actorUser,
   });
 };
 

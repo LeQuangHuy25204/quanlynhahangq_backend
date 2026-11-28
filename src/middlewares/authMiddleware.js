@@ -1,6 +1,7 @@
 'use strict';
 
 const jwt = require('jsonwebtoken');
+const { setContextUser } = require('../utils/requestContext');
 
 /**
  * Middleware xác thực JWT.
@@ -57,7 +58,10 @@ const authenticate = (req, res, next) => {
       restaurantId: decoded.restaurantId,
       branchId:     decoded.branchId ?? null,
       roleCode:     decoded.roleCode,
+      fullName:     decoded.fullName ?? null,
+      username:     decoded.username ?? null,
     };
+    setContextUser(req.user);
 
     next();
   } catch (err) {

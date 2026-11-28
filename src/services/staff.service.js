@@ -2,7 +2,8 @@
 
 const bcrypt     = require('bcryptjs');
 const staffModel = require('../models/staff.model');
-const { ROLE_CODE } = require('../constants/status');
+const activityLogService = require('./activityLog.service');
+const { ROLE_CODE, LOG_SEVERITY } = require('../constants/status');
 
 /**
  * Tạo tài khoản nhân viên mới.
@@ -68,6 +69,25 @@ const createStaff = async (data, actorUser) => {
     email,
     username,
     passwordHash,
+  });
+
+  const isPrivilegedRole = [ROLE_CODE.RESTAURANT_ADMIN, ROLE_CODE.BRANCH_MANAGER].includes(roleCode);
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: parseInt(branchId, 10),
+    entityType: 'Staff',
+    entityId: staffId,
+    action: 'STAFF_CREATE',
+    severity: isPrivilegedRole ? LOG_SEVERITY.CRITICAL : LOG_SEVERITY.WARNING,
+    description: `Tạo tài khoản nhân viên "${fullName}" (${username}, vai trò ${roleCode}) tại chi nhánh #${parseInt(branchId, 10)}.`,
+    newValue: {
+      staffId,
+      username,
+      fullName,
+      phone,
+      email: email || null,
+      roleCode,
+      branchId: parseInt(branchId, 10),
+    },
   });
 
   return { staffId, username, fullName, roleCode, branchId: parseInt(branchId, 10) };
@@ -158,6 +178,18 @@ const toggleStaffStatus = async (staffId, status, actorUser) => {
   }
 
   await staffModel.updateStaffStatus(staffId, parsedStatus);
+
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: staff.BranchID,
+    entityType: 'Staff',
+    entityId: staff.StaffID,
+    action: 'STAFF_STATUS_CHANGE',
+    severity: LOG_SEVERITY.CRITICAL,
+    description: `${parsedStatus === 1 ? 'Mở khóa' : 'Khóa'} tài khoản nhân viên "${staff.FullName}" (${staff.Username} - ${staff.RoleCode}).`,
+    oldValue: { staffId: staff.StaffID, username: staff.Username, roleCode: staff.RoleCode, status: staff.Status },
+    newValue: { staffId: staff.StaffID, username: staff.Username, roleCode: staff.RoleCode, status: parsedStatus },
+  });
+
   return {
     staffId: staff.StaffID,
     status:  parsedStatus,

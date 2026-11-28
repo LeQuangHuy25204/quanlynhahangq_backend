@@ -526,6 +526,7 @@ CREATE TABLE `session` (
   UNIQUE KEY `UQ_Session_SessionToken` (`SessionToken`),
   UNIQUE KEY `UQ_Session_JoinCode` (`JoinCode`),
   KEY `FK_Session_Table` (`TableID`),
+  KEY `idx_session_status_created` (`Status`, `CreatedAt`),
   CONSTRAINT `FK_Session_Table` FOREIGN KEY (`TableID`) REFERENCES `table` (`TableID`)
 ) ENGINE=InnoDB AUTO_INCREMENT=763 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -637,6 +638,43 @@ LOCK TABLES `table` WRITE;
 INSERT INTO `table` VALUES (1,1,'Bàn T1-01','table_qr_1',1),(2,1,'Bàn T1-02','table_qr_2',1),(3,2,'Bàn VIP-01','table_qr_3',1),(4,3,'Bàn V-01','table_qr_4',1),(5,3,'Bàn V-02','table_qr_5',1),(6,3,'Bàn V-03','table_qr_6',1),(7,3,'Bàn V-04','table_qr_7',1),(8,3,'Bàn VIP-02','table_qr_8',1);
 /*!40000 ALTER TABLE `table` ENABLE KEYS */;
 UNLOCK TABLES;
+
+--
+-- Table structure for table `activitylog`
+--
+
+DROP TABLE IF EXISTS `activitylog`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `activitylog` (
+  `LogID` bigint(20) NOT NULL AUTO_INCREMENT,
+  `RestaurantID` bigint(20) NOT NULL DEFAULT 1,
+  `BranchID` bigint(20) DEFAULT NULL COMMENT 'NULL nếu thao tác toàn chuỗi hoặc cấp hệ thống',
+  `StaffID` bigint(20) DEFAULT NULL COMMENT 'FK tới staff nếu actor là nhân viên/quản lý; NULL nếu Guest/System',
+  `ActorType` varchar(30) NOT NULL COMMENT 'RestaurantAdmin | BranchManager | Cashier | Waiter | Guest | System',
+  `ActorName` varchar(255) NOT NULL COMMENT 'Tên hiển thị của actor thực hiện thao tác',
+  `EntityType` varchar(50) NOT NULL COMMENT 'Tên bảng/đối tượng bị tác động',
+  `EntityID` bigint(20) DEFAULT NULL COMMENT 'ID bản ghi bị tác động',
+  `Action` varchar(100) NOT NULL COMMENT 'Mã hành động chuẩn hóa',
+  `Severity` varchar(20) NOT NULL DEFAULT 'INFO' COMMENT 'Mức độ: INFO | WARNING | CRITICAL',
+  `Description` varchar(500) NOT NULL COMMENT 'Mô tả chi tiết bằng tiếng Việt',
+  `OldValue` json DEFAULT NULL COMMENT 'Dữ liệu gốc trước khi bị thay đổi',
+  `NewValue` json DEFAULT NULL COMMENT 'Dữ liệu mới sau khi đã thay đổi',
+  `IPAddress` varchar(45) DEFAULT NULL COMMENT 'Địa chỉ IP phát sinh thao tác',
+  `Timestamp` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`LogID`),
+  KEY `idx_activitylog_restaurant_time` (`RestaurantID`, `Timestamp`),
+  KEY `idx_activitylog_branch_time` (`BranchID`, `Timestamp`),
+  KEY `idx_activitylog_actor` (`ActorType`, `Timestamp`),
+  KEY `idx_activitylog_staff` (`StaffID`, `Timestamp`),
+  KEY `idx_activitylog_entity` (`EntityType`, `EntityID`),
+  KEY `idx_activitylog_action_severity` (`Action`, `Severity`),
+  CONSTRAINT `FK_ActivityLog_Restaurant` FOREIGN KEY (`RestaurantID`) REFERENCES `restaurant` (`RestaurantID`) ON DELETE CASCADE,
+  CONSTRAINT `FK_ActivityLog_Branch` FOREIGN KEY (`BranchID`) REFERENCES `branch` (`BranchID`) ON DELETE SET NULL,
+  CONSTRAINT `FK_ActivityLog_Staff` FOREIGN KEY (`StaffID`) REFERENCES `staff` (`StaffID`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;

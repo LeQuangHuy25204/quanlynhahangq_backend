@@ -2,7 +2,9 @@
 
 const tableModel = require('../models/table.model');
 const staffModel = require('../models/staff.model'); // dùng verifyBranchBelongsToRestaurant
-const { ROLE_CODE } = require('../constants/status');
+const sessionService = require('./session.service');
+const activityLogService = require('./activityLog.service');
+const { ROLE_CODE, LOG_SEVERITY } = require('../constants/status');
 
 // ─── Helper: kiểm tra chi nhánh thuộc nhà hàng và actorUser có quyền ────────
 const assertBranchAccess = async (branchId, actorUser) => {
@@ -36,8 +38,18 @@ const createArea = async ({ branchId, name }, actorUser) => {
     const err = new Error('branchId và name là bắt buộc.'); err.statusCode = 400; throw err;
   }
   await assertBranchAccess(branchId, actorUser);
-  const areaId = await tableModel.createArea({ branchId: parseInt(branchId, 10), name });
-  return { areaId, branchId: parseInt(branchId, 10), name };
+  const parsedBranchId = parseInt(branchId, 10);
+  const areaId = await tableModel.createArea({ branchId: parsedBranchId, name });
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: parsedBranchId,
+    entityType: 'Area',
+    entityId: areaId,
+    action: 'AREA_CREATE',
+    severity: LOG_SEVERITY.INFO,
+    description: `Tạo khu vực mới "${name}" tại chi nhánh #${parsedBranchId}.`,
+    newValue: { areaId, branchId: parsedBranchId, name },
+  });
+  return { areaId, branchId: parsedBranchId, name };
 };
 
 const updateArea = async (areaId, body, actorUser) => {
@@ -49,6 +61,16 @@ const updateArea = async (areaId, body, actorUser) => {
   const name     = body.name     ?? area.Name;
   const isActive = body.isActive !== undefined ? body.isActive : area.IsActive;
   await tableModel.updateArea(areaId, { name, isActive });
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: area.BranchID,
+    entityType: 'Area',
+    entityId: parseInt(areaId, 10),
+    action: 'AREA_UPDATE',
+    severity: Number(isActive) === 0 ? LOG_SEVERITY.WARNING : LOG_SEVERITY.INFO,
+    description: `Cập nhật khu vực "${name}" (#${areaId}).`,
+    oldValue: { name: area.Name, isActive: area.IsActive },
+    newValue: { name, isActive },
+  });
   return { areaId: parseInt(areaId, 10), name, isActive };
 };
 
@@ -56,7 +78,10 @@ const updateArea = async (areaId, body, actorUser) => {
 
 const getTablesByBranch = async (branchId, actorUser) => {
   await assertBranchAccess(branchId, actorUser);
-  return tableModel.findTablesByBranch(branchId);
+  await sessionService.closeExpiredWaitingSessions();
+  return tableModel.findTablesByBranch(branchId, {
+    waitTimeoutSeconds: sessionService.WAIT_OPEN_TIMEOUT_SECONDS,
+  });
 };
 
 const createTable = async ({ areaId, name }, actorUser) => {
@@ -69,6 +94,15 @@ const createTable = async ({ areaId, name }, actorUser) => {
   }
   await assertBranchAccess(area.BranchID, actorUser);
   const { tableId, qrCode } = await tableModel.createTable({ areaId: parseInt(areaId, 10), name });
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: area.BranchID,
+    entityType: 'Table',
+    entityId: tableId,
+    action: 'TABLE_CREATE',
+    severity: LOG_SEVERITY.INFO,
+    description: `Tạo bàn mới "${name}" thuộc khu vực "${area.Name}" (#${area.AreaID}).`,
+    newValue: { tableId, areaId: parseInt(areaId, 10), name, qrCode },
+  });
   return { tableId, areaId: parseInt(areaId, 10), name, qrCode };
 };
 
@@ -81,6 +115,16 @@ const updateTable = async (tableId, body, actorUser) => {
   const name     = body.name     ?? table.Name;
   const isActive = body.isActive !== undefined ? body.isActive : table.IsActive;
   await tableModel.updateTable(tableId, { name, isActive });
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: table.BranchID,
+    entityType: 'Table',
+    entityId: parseInt(tableId, 10),
+    action: 'TABLE_UPDATE',
+    severity: Number(isActive) !== Number(table.IsActive) ? LOG_SEVERITY.WARNING : LOG_SEVERITY.INFO,
+    description: `Cập nhật bàn "${name}" (#${tableId}).`,
+    oldValue: { name: table.Name, isActive: table.IsActive },
+    newValue: { name, isActive },
+  });
   return { tableId: parseInt(tableId, 10), name, isActive };
 };
 

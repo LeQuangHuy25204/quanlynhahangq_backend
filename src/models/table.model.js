@@ -50,7 +50,7 @@ const findTablesByArea = async (areaId) => {
   return rows;
 };
 
-const findTablesByBranch = async (branchId) => {
+const findTablesByBranch = async (branchId, { waitTimeoutSeconds = 300 } = {}) => {
   const [rows] = await pool.execute(
     `SELECT
        t.TableID, t.Name, t.QRCode, t.IsActive,
@@ -60,6 +60,7 @@ const findTablesByBranch = async (branchId) => {
        s.Status      AS SessionStatus,
        s.GuestCount  AS SessionGuestCount,
        s.StartTime   AS SessionStartTime,
+       s.CreatedAt   AS SessionCreatedAt,
        -- Order total amount
        COALESCE(SUM(ol.LineTotal - ol.DiscountApplied), 0) AS SessionTotalAmount,
        -- Số lượng món khách đang gửi yêu cầu hủy tại bàn
@@ -79,7 +80,7 @@ const findTablesByBranch = async (branchId) => {
      LEFT JOIN orderline ol ON ol.OrderID = o.OrderID AND ol.Status NOT IN (3)
      WHERE a.BranchID = ?
      GROUP BY t.TableID, t.Name, t.QRCode, t.IsActive, a.AreaID, a.Name,
-              s.SessionID, s.Status, s.GuestCount, s.StartTime
+              s.SessionID, s.Status, s.GuestCount, s.StartTime, s.CreatedAt
      ORDER BY a.Name, t.Name`,
     [branchId]
   );
@@ -87,6 +88,10 @@ const findTablesByBranch = async (branchId) => {
   // Reshape to { TableID, Name, AreaName, Session: {...} | null }
   return rows.map(r => {
     const ramSupport = r.SessionID ? sessionModel.getSupportRequest(r.SessionID) : null;
+    const waitOrigin = r.SessionCreatedAt || r.SessionStartTime;
+    const expiresAt = (r.SessionStatus === 0 && waitOrigin)
+      ? new Date(new Date(waitOrigin).getTime() + waitTimeoutSeconds * 1000).toISOString()
+      : null;
     return {
       TableID:  r.TableID,
       Name:     r.Name,
@@ -99,6 +104,9 @@ const findTablesByBranch = async (branchId) => {
         Status:             r.SessionStatus,
         GuestCount:         r.SessionGuestCount,
         StartTime:          r.SessionStartTime,
+        CreatedAt:          r.SessionCreatedAt || r.SessionStartTime,
+        ExpiresAt:          expiresAt,
+        WaitTimeoutSeconds: waitTimeoutSeconds,
         TotalAmount:        parseFloat(r.SessionTotalAmount) || 0,
         CancelRequestCount: parseInt(r.CancelRequestCount, 10) || 0,
         NeedSupport:        Boolean(ramSupport),

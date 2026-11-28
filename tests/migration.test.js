@@ -46,7 +46,9 @@ test('runMigrations runs all pending SQL files in order and skips already applie
   const mockDb = createMockDb();
 
   const firstRun = await runMigrations({ createConnection: mockDb.createConnection });
+  assert.ok(expectedMigrations.includes('002_branch_menu_stock.sql'));
   assert.ok(expectedMigrations.includes('003_seed_promotions.sql'));
+  assert.ok(expectedMigrations.includes('004_activity_log.sql'));
   assert.deepEqual(firstRun.applied, expectedMigrations);
   assert.deepEqual(firstRun.skipped, []);
   assert.equal(mockDb.isClosed(), true);

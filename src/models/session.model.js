@@ -35,7 +35,8 @@ const findActiveSessionByTableId = async (tableId) => {
        JoinCode,
        Status,
        GuestCount,
-       StartTime
+       StartTime,
+       CreatedAt
      FROM session
      WHERE TableID = ?
        AND Status  IN (0, 1)
@@ -65,6 +66,7 @@ const createSession = async ({ tableId, sessionToken, joinCode, status, guestCou
 const findSessionByToken = async (sessionToken) => {
   const [rows] = await pool.execute(
     `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode,
+            s.StartTime, s.EndTime, s.CreatedAt,
             t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
@@ -155,6 +157,7 @@ const getSupportRequest = (sessionId) => {
 const findSessionByJoinCode = async (joinCode) => {
   const [rows] = await pool.execute(
     `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode, s.GuestCount,
+            s.StartTime, s.EndTime, s.CreatedAt,
             t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
@@ -174,6 +177,7 @@ const findSessionByJoinCode = async (joinCode) => {
 const findSessionById = async (sessionId) => {
   const [rows] = await pool.execute(
     `SELECT s.SessionID, s.SessionToken, s.TableID, s.Status, s.JoinCode, s.GuestCount,
+            s.StartTime, s.EndTime, s.CreatedAt,
             t.Name AS TableName, a.BranchID, b.RestaurantID
      FROM session s
      INNER JOIN \`table\` t ON s.TableID = t.TableID
@@ -194,7 +198,10 @@ const findSessionById = async (sessionId) => {
  */
 const updateSessionStatus = async (sessionId, status, conn = pool) => {
   const [result] = await conn.execute(
-    `UPDATE session SET Status = ?
+    `UPDATE session
+     SET Status = ?,
+         StartTime = CASE WHEN Status = 0 AND ? = 1 THEN NOW() ELSE StartTime END,
+         EndTime = CASE WHEN ? = 2 THEN COALESCE(EndTime, NOW()) ELSE EndTime END
      WHERE SessionID = ?
        AND (
          ? <> 2
@@ -209,7 +216,63 @@ const updateSessionStatus = async (sessionId, status, conn = pool) => {
            WHERE o.SessionID = session.SessionID AND ol.Status <> 3
          )
        )`,
-    [status, sessionId, status]
+    [status, status, status, sessionId, status]
+  );
+  return result.affectedRows;
+};
+
+/**
+ * Tìm các phiên bàn đang ở trạng thái CHỜ MỞ BÀN (Status = 0) đã vượt quá số giây chờ cho phép.
+ */
+const findExpiredWaitingSessions = async (timeoutSeconds = 300, { tableId = null, sessionId = null } = {}, conn = pool) => {
+  let sql = `
+    SELECT s.SessionID, s.TableID, s.GuestCount, s.StartTime, s.CreatedAt,
+           t.Name AS TableName, a.BranchID, b.RestaurantID,
+           TIMESTAMPDIFF(SECOND, s.CreatedAt, NOW()) AS ElapsedSeconds
+    FROM session s
+    INNER JOIN \`table\` t ON s.TableID = t.TableID
+    INNER JOIN area a ON t.AreaID = a.AreaID
+    INNER JOIN branch b ON a.BranchID = b.BranchID
+    WHERE s.Status = 0
+      AND TIMESTAMPDIFF(SECOND, s.CreatedAt, NOW()) >= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM \`order\` o
+        INNER JOIN orderline ol ON ol.OrderID = o.OrderID
+        WHERE o.SessionID = s.SessionID AND ol.Status <> 3
+      )
+  `;
+  const params = [timeoutSeconds];
+  if (tableId) {
+    sql += ' AND s.TableID = ?';
+    params.push(tableId);
+  }
+  if (sessionId) {
+    sql += ' AND s.SessionID = ?';
+    params.push(sessionId);
+  }
+  sql += ' ORDER BY s.SessionID ASC';
+  const [rows] = await conn.execute(sql, params);
+  return rows;
+};
+
+/**
+ * Đóng nguyên tử một phiên WAITING_OPEN (Status = 0 -> 2) nếu đã quá thời gian chờ.
+ * Trả về affectedRows = 1 chỉ cho duy nhất caller đầu tiên thực hiện đóng.
+ */
+const autoCloseWaitingSessionById = async (sessionId, timeoutSeconds = 300, conn = pool) => {
+  const [result] = await conn.execute(
+    `UPDATE session
+     SET Status = 2,
+         EndTime = COALESCE(EndTime, NOW())
+     WHERE SessionID = ?
+       AND Status = 0
+       AND TIMESTAMPDIFF(SECOND, CreatedAt, NOW()) >= ?
+       AND NOT EXISTS (
+         SELECT 1 FROM \`order\` o
+         INNER JOIN orderline ol ON ol.OrderID = o.OrderID
+         WHERE o.SessionID = session.SessionID AND ol.Status <> 3
+       )`,
+    [sessionId, timeoutSeconds]
   );
   return result.affectedRows;
 };
@@ -239,5 +302,7 @@ module.exports = {
   getSupportRequest,
   findSessionById,
   updateSessionStatus,
-  updateGuestCount
+  updateGuestCount,
+  findExpiredWaitingSessions,
+  autoCloseWaitingSessionById
 };

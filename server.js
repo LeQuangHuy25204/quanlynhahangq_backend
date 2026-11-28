@@ -5,6 +5,7 @@ require('dotenv').config();
 const app = require('./src/app');
 const { testConnection } = require('./src/config/db');
 const { runMigrations } = require('./sql/run_migration');
+const { startAutoCloseWaitingSessionsJob } = require('./src/services/session.service');
 
 const PORT = process.env.PORT || 3000;
 
@@ -13,6 +14,7 @@ const startServer = async ({
   migrate = runMigrations,
   listenApp = app,
   port = PORT,
+  enableBackgroundJobs = process.env.NODE_ENV !== 'test',
 } = {}) => {
   try {
     // Kiểm tra DB trước — fail-fast nếu không kết nối được (và tự seed nếu DB mới tạo còn trống)
@@ -24,6 +26,9 @@ const startServer = async ({
       const server = listenApp.listen(port, () => {
         console.log(`[SERVER] ✅ Server đang chạy tại http://localhost:${port}`);
         console.log(`[SERVER] 📦 Môi trường: ${process.env.NODE_ENV || 'development'}`);
+        if (enableBackgroundJobs) {
+          startAutoCloseWaitingSessionsJob();
+        }
         queueMicrotask(() => resolve(server));
       });
     });

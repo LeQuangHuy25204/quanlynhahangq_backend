@@ -1,6 +1,8 @@
 'use strict';
 
 const promotionModel = require('../models/promotion.model');
+const activityLogService = require('./activityLog.service');
+const { LOG_SEVERITY } = require('../constants/status');
 
 const APPLY_LEVELS = ['INVOICE', 'MENU_ITEM', 'CATEGORY'];
 
@@ -106,6 +108,17 @@ const createPromotion = async (data, actorUser) => {
   const promotionId = await promotionModel.createPromotion({
     ...data, ...scope, branchId, restaurantId: actorUser.restaurantId,
   });
+
+  await activityLogService.logStaffAction(actorUser, {
+    branchId,
+    entityType: 'Promotion',
+    entityId: promotionId,
+    action: 'PROMOTION_CREATE',
+    severity: LOG_SEVERITY.WARNING,
+    description: `Tạo khuyến mãi "${name}" (${discountType} ${discountValue}, phạm vi ${scope.applyLevel})${branchId ? ` tại chi nhánh #${branchId}` : ' (toàn chuỗi)'}.`,
+    newValue: { promotionId, name, branchId, discountType, discountValue: Number(discountValue), ...scope },
+  });
+
   return { promotionId, ...data, ...scope, branchId };
 };
 
@@ -168,6 +181,32 @@ const updatePromotion = async (promotionId, data, actorUser) => {
     ...scope,
   };
   await promotionModel.updatePromotion(promotionId, merged);
+
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: merged.branchId,
+    entityType: 'Promotion',
+    entityId: parseInt(promotionId, 10),
+    action: 'PROMOTION_UPDATE',
+    severity: LOG_SEVERITY.CRITICAL,
+    description: `Cập nhật khuyến mãi "${merged.name}" (#${promotionId}).`,
+    oldValue: {
+      name: promotion.Name,
+      branchId: promotion.BranchID,
+      applyLevel: promotion.ApplyLevel,
+      discountType: promotion.DiscountType,
+      discountValue: Number(promotion.DiscountValue),
+      isActive: promotion.IsActive,
+    },
+    newValue: {
+      name: merged.name,
+      branchId: merged.branchId,
+      applyLevel: merged.applyLevel,
+      discountType: merged.discountType,
+      discountValue: Number(merged.discountValue),
+      isActive: merged.isActive ? 1 : 0,
+    },
+  });
+
   return { promotionId: parseInt(promotionId, 10), ...merged };
 };
 

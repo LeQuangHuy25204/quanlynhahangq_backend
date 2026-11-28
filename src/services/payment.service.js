@@ -9,6 +9,7 @@ const sessionModel = require('../models/session.model');
 const orderModel = require('../models/order.model');
 const { prepareSessionForPayment } = require('./order.service');
 const vnpayService = require('./vnpay.service');
+const activityLogService = require('./activityLog.service');
 const {
   PAYMENT_STATUS,
   PAYMENT_METHOD,
@@ -16,6 +17,7 @@ const {
   ORDER_LINE_STATUS,
   SESSION_STATUS,
   ROLE_CODE,
+  LOG_SEVERITY,
 } = require('../constants/status');
 
 const MANUAL_ALLOWED_METHODS = [
@@ -289,6 +291,7 @@ const ensureInvoiceAndPayment = async (sessionId, actorUser, promotionId = null,
       paymentId,
       invoiceId,
       invoiceNumber,
+      branchId: t.branchConfig.BranchID,
       subTotal: t.subTotal,
       vatAmount: t.vatAmount,
       serviceFeeAmount: t.serviceFeeAmount,
@@ -309,9 +312,31 @@ const ensureInvoiceAndPayment = async (sessionId, actorUser, promotionId = null,
  * Thu ngân tạo hóa đơn (Checkout) cho toàn bộ phiên bàn.
  */
 const checkoutSession = async (sessionId, actorUser, promotionId = null) => {
-  return withSessionPaymentLock(sessionId, () =>
-    ensureInvoiceAndPayment(sessionId, actorUser, promotionId, PAYMENT_METHOD.CASH)
-  );
+  return withSessionPaymentLock(sessionId, async () => {
+    const result = await ensureInvoiceAndPayment(sessionId, actorUser, promotionId, PAYMENT_METHOD.CASH);
+    if (!result.reused) {
+      await activityLogService.logStaffAction(actorUser, {
+        branchId: result.branchId || actorUser.branchId,
+        entityType: 'Invoice',
+        entityId: result.invoiceId,
+        action: 'INVOICE_CHECKOUT',
+        severity: LOG_SEVERITY.INFO,
+        description: `Tạo hóa đơn ${result.invoiceNumber} cho Phiên #${sessionId} (Tổng ${result.totalAmount.toLocaleString('vi-VN')}đ).`,
+        newValue: {
+          invoiceId: result.invoiceId,
+          invoiceNumber: result.invoiceNumber,
+          sessionId: Number(sessionId),
+          promotionId: promotionId || null,
+          subTotal: result.subTotal,
+          vatAmount: result.vatAmount,
+          serviceFeeAmount: result.serviceFeeAmount,
+          discountAmount: result.discountAmount,
+          totalAmount: result.totalAmount,
+        },
+      });
+    }
+    return result;
+  });
 };
 
 /**
@@ -347,6 +372,28 @@ const completePayment = async (paymentId, actorUser, paymentMethod = PAYMENT_MET
   } finally {
     conn.release();
   }
+
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: payment.BranchID,
+    entityType: 'Payment',
+    entityId: parseInt(paymentId, 10),
+    action: 'PAYMENT_COMPLETE',
+    severity: LOG_SEVERITY.CRITICAL,
+    description: `Xác nhận thanh toán hoàn tất (${paymentMethod}) cho Hóa đơn ${payment.InvoiceNumber} (${parseFloat(payment.Amount).toLocaleString('vi-VN')}đ) và đóng Phiên #${payment.SessionID}.`,
+    oldValue: {
+      paymentStatus: payment.Status,
+      paymentMethod: payment.PaymentMethod,
+      sessionId: payment.SessionID,
+    },
+    newValue: {
+      paymentStatus: PAYMENT_STATUS.PAID,
+      paymentMethod,
+      amount: parseFloat(payment.Amount),
+      transactionNo: transactionNo || null,
+      invoiceNumber: payment.InvoiceNumber,
+      sessionId: payment.SessionID,
+    },
+  });
 
   return { paymentId: parseInt(paymentId, 10), status: PAYMENT_STATUS.PAID, message: 'Thanh toán thành công!' };
 };
@@ -461,6 +508,30 @@ const createVnpayPayment = async ({
       ipAddr: normalizedIp,
     });
 
+    const vnpLogPayload = {
+      branchId: session.BranchID,
+      entityType: 'Payment',
+      entityId: invoiceData.paymentId,
+      action: 'VNPAY_CREATE',
+      severity: LOG_SEVERITY.INFO,
+      description: `Khởi tạo thanh toán VNPay ${vnpTxnRef} cho ${invoiceData.invoiceNumber} (${invoiceData.totalAmount.toLocaleString('vi-VN')}đ).`,
+      newValue: {
+        txnRef: vnpTxnRef,
+        invoiceNumber: invoiceData.invoiceNumber,
+        amount: invoiceData.totalAmount,
+        sessionId: session.SessionID,
+      },
+    };
+    if (actorUser) {
+      await activityLogService.logStaffAction(actorUser, vnpLogPayload);
+    } else {
+      await activityLogService.logGuestAction({
+        restaurantId: session.RestaurantID || 1,
+        actorName: `Khách tại ${session.TableName || `bàn #${session.TableID}`}`,
+        ...vnpLogPayload,
+      });
+    }
+
     return {
       paymentUrl,
       txnRef: vnpTxnRef,
@@ -533,6 +604,23 @@ const processVnpayResultInTransaction = async (vnpData, source = 'IPN', deps = {
       await pModel.markPaymentFailedIfPending(tx.PaymentID, failNote, conn);
 
       await conn.commit();
+      const logger = deps.activityLog || (deps.pool ? null : activityLogService);
+      if (logger) {
+        await logger.logSystemAction({
+          branchId: tx.BranchID ?? null,
+          actorName: source === 'QUERYDR' && deps.actorUser
+            ? `${deps.actorUser.fullName || deps.actorUser.username || 'Thu ngân'}`
+            : `VNPay ${source}`,
+          actorType: source === 'QUERYDR' && deps.actorUser ? deps.actorUser.roleCode : 'System',
+          staffId: source === 'QUERYDR' && deps.actorUser ? deps.actorUser.staffId : null,
+          entityType: 'Payment',
+          entityId: tx.PaymentID,
+          action: 'VNPAY_IPN_FAILED',
+          severity: LOG_SEVERITY.WARNING,
+          description: `Giao dịch VNPay ${vnpTxnRef} (${failStatus}, mã ${vnpResponseCode}) cho hóa đơn ${tx.InvoiceNumber}.`,
+          newValue: { txnRef: vnpTxnRef, resultStatus: failStatus, responseCode: vnpResponseCode },
+        });
+      }
       return { RspCode: '00', Message: 'Confirm Success', resultStatus: failStatus };
     }
 
@@ -549,6 +637,30 @@ const processVnpayResultInTransaction = async (vnpData, source = 'IPN', deps = {
     await sModel.updateSessionStatus(tx.SessionID, SESSION_STATUS.CLOSED, conn);
 
     await conn.commit();
+    const logger = deps.activityLog || (deps.pool ? null : activityLogService);
+    if (logger) {
+      const logPayload = {
+        branchId: tx.BranchID ?? null,
+        entityType: 'Payment',
+        entityId: tx.PaymentID,
+        action: 'VNPAY_IPN_PAID',
+        severity: LOG_SEVERITY.CRITICAL,
+        description: `VNPay (${source}) xác nhận thanh toán thành công ${vnpTxnRef} cho ${tx.InvoiceNumber} (${parseFloat(tx.Amount).toLocaleString('vi-VN')}đ) và đóng Phiên #${tx.SessionID}.`,
+        oldValue: { paymentStatus: tx.PaymentStatus },
+        newValue: {
+          paymentStatus: PAYMENT_STATUS.PAID,
+          txnRef: vnpTxnRef,
+          bankTransactionNo: vnpTransactionNo || null,
+          bankCode: vnpBankCode || null,
+          amount: parseFloat(tx.Amount),
+        },
+      };
+      if (source === 'QUERYDR' && deps.actorUser) {
+        await logger.logStaffAction(deps.actorUser, logPayload);
+      } else {
+        await logger.logSystemAction({ actorName: `VNPay ${source}`, ...logPayload });
+      }
+    }
     return { RspCode: '00', Message: 'Confirm Success', resultStatus: VNPAY_TX_STATUS.SUCCESS };
   } catch (err) {
     await conn.rollback();
@@ -703,7 +815,8 @@ const queryVnpayTransaction = async ({ txnRef, actorUser, ipAddr = '127.0.0.1' }
         vnp_Amount: queryResult.vnp_Amount || String(tx.AmountVnp),
         vnp_ResponseCode: queryResult.vnp_TransactionStatus === '00' ? '00' : '99',
       },
-      'QUERYDR'
+      'QUERYDR',
+      { actorUser }
     );
   }
 
@@ -826,6 +939,30 @@ const createSepayPayment = async ({
 
     const vietQr = buildVietQrWithCode({ amount: invoiceData.totalAmount, code: sepayCode });
 
+    const sepayLogPayload = {
+      branchId: session.BranchID,
+      entityType: 'Payment',
+      entityId: invoiceData.paymentId,
+      action: 'SEPAY_CREATE',
+      severity: LOG_SEVERITY.INFO,
+      description: `Khởi tạo VietQR SePay ${sepayCode} cho ${invoiceData.invoiceNumber} (${invoiceData.totalAmount.toLocaleString('vi-VN')}đ).`,
+      newValue: {
+        txnRef: sepayCode,
+        invoiceNumber: invoiceData.invoiceNumber,
+        amount: invoiceData.totalAmount,
+        sessionId: session.SessionID,
+      },
+    };
+    if (actorUser) {
+      await activityLogService.logStaffAction(actorUser, sepayLogPayload);
+    } else {
+      await activityLogService.logGuestAction({
+        restaurantId: session.RestaurantID || 1,
+        actorName: `Khách tại ${session.TableName || `bàn #${session.TableID}`}`,
+        ...sepayLogPayload,
+      });
+    }
+
     return {
       txnRef: sepayCode,
       transferCode: sepayCode,
@@ -913,6 +1050,27 @@ const handleSepayWebhook = async (authHeader, payload = {}, deps = {}) => {
     await sModel.updateSessionStatus(tx.SessionID, SESSION_STATUS.CLOSED, conn);
 
     await conn.commit();
+    const logger = deps.activityLog || (deps.pool ? null : activityLogService);
+    if (logger) {
+      await logger.logSystemAction({
+        branchId: tx.BranchID ?? null,
+        actorName: `SePay Webhook (${gateway})`,
+        entityType: 'Payment',
+        entityId: tx.PaymentID,
+        action: 'SEPAY_WEBHOOK_PAID',
+        severity: LOG_SEVERITY.CRITICAL,
+        description: `SePay Webhook (${gateway}) xác nhận nhận ${transferAmount || expectedAmount}đ cho ${sepayCode} (${tx.InvoiceNumber}) và đóng Phiên #${tx.SessionID}.`,
+        oldValue: { paymentStatus: tx.PaymentStatus },
+        newValue: {
+          paymentStatus: PAYMENT_STATUS.PAID,
+          txnRef: sepayCode,
+          bankRef,
+          gateway,
+          amount: transferAmount || expectedAmount,
+          invoiceNumber: tx.InvoiceNumber,
+        },
+      });
+    }
     console.log(`[SEPAY_WEBHOOK] ✅ Xác nhận thanh toán thành công ${sepayCode} (${transferAmount}đ) qua ${gateway}`);
     return { matched: true, success: true, txnRef: sepayCode, paymentId: tx.PaymentID };
   } catch (err) {

@@ -70,6 +70,23 @@ const ROLE_CODE = Object.freeze({
   RESTAURANT_ADMIN: 'RestaurantAdmin',
 });
 
+// ActorType trong ActivityLog (bao gồm cả Khách & Hệ thống tự động)
+const ACTOR_TYPE = Object.freeze({
+  RESTAURANT_ADMIN: 'RestaurantAdmin',
+  BRANCH_MANAGER:   'BranchManager',
+  CASHIER:          'Cashier',
+  WAITER:           'Waiter',
+  GUEST:            'Guest',
+  SYSTEM:           'System',
+});
+
+// Mức độ log (Severity) trong ActivityLog
+const LOG_SEVERITY = Object.freeze({
+  INFO:     'INFO',
+  WARNING:  'WARNING',
+  CRITICAL: 'CRITICAL',
+});
+
 module.exports = {
   SESSION_STATUS,
   ORDER_STATUS,
@@ -79,4 +96,6 @@ module.exports = {
   VNPAY_TX_STATUS,
   STAFF_STATUS,
   ROLE_CODE,
+  ACTOR_TYPE,
+  LOG_SEVERITY,
 };

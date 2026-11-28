@@ -5,6 +5,8 @@ const router  = express.Router();
 const { pool } = require('../config/db');
 const { authenticate } = require('../middlewares/authMiddleware');
 const { requireRole }  = require('../middlewares/roleMiddleware');
+const activityLogService = require('../services/activityLog.service');
+const { LOG_SEVERITY } = require('../constants/status');
 
 /**
  * @route   GET /api/branches
@@ -48,20 +50,38 @@ router.post(
       if (!name || !address || !phone) {
         return res.status(400).json({ success: false, message: 'Tên, địa chỉ và số điện thoại là bắt buộc.' });
       }
+      const createdValues = {
+        name: String(name).trim(),
+        address: String(address).trim(),
+        phone: String(phone).trim(),
+        bussinessStartHour: bussinessStartHour || '10:00:00',
+        vatRate: vatRate != null ? parseFloat(vatRate) : 8.00,
+        serviceFeeRate: serviceFeeRate != null ? parseFloat(serviceFeeRate) : 5.00,
+        taxCode: taxCode ? String(taxCode).trim() : null,
+      };
       const [result] = await pool.execute(
         `INSERT INTO branch (RestaurantID, Name, Address, Phone, BussinessStartHour, VATRate, ServiceFeeRate, TaxCode, IsActive)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
         [
           restaurantId,
-          String(name).trim(),
-          String(address).trim(),
-          String(phone).trim(),
-          bussinessStartHour || '10:00:00',
-          vatRate != null ? parseFloat(vatRate) : 8.00,
-          serviceFeeRate != null ? parseFloat(serviceFeeRate) : 5.00,
-          taxCode ? String(taxCode).trim() : null
+          createdValues.name,
+          createdValues.address,
+          createdValues.phone,
+          createdValues.bussinessStartHour,
+          createdValues.vatRate,
+          createdValues.serviceFeeRate,
+          createdValues.taxCode
         ]
       );
+      await activityLogService.logStaffAction(req.user, {
+        branchId: result.insertId,
+        entityType: 'Branch',
+        entityId: result.insertId,
+        action: 'BRANCH_CREATE',
+        severity: LOG_SEVERITY.CRITICAL,
+        description: `Tạo chi nhánh mới "${createdValues.name}" (VAT ${createdValues.vatRate}%, Phí PV ${createdValues.serviceFeeRate}%).`,
+        newValue: { branchId: result.insertId, ...createdValues },
+      });
       res.status(201).json({ success: true, message: 'Tạo chi nhánh thành công.', data: { branchId: result.insertId } });
     } catch (err) { next(err); }
   }
@@ -112,6 +132,41 @@ router.put(
          WHERE BranchID = ?`,
         [newName, newAddress, newPhone, newStartHour, newVat, newServiceFee, newTaxCode, newIsActive, branchId]
       );
+
+      const criticalChanged =
+        Number(newVat) !== Number(b.VATRate) ||
+        Number(newServiceFee) !== Number(b.ServiceFeeRate) ||
+        Number(newIsActive) !== Number(b.IsActive) ||
+        newName !== b.Name;
+
+      await activityLogService.logStaffAction(req.user, {
+        branchId,
+        entityType: 'Branch',
+        entityId: branchId,
+        action: 'BRANCH_UPDATE',
+        severity: criticalChanged ? LOG_SEVERITY.CRITICAL : LOG_SEVERITY.WARNING,
+        description: `Cập nhật cấu hình chi nhánh "${newName}" (#${branchId}).`,
+        oldValue: {
+          name: b.Name,
+          address: b.Address,
+          phone: b.Phone,
+          bussinessStartHour: String(b.BussinessStartHour),
+          vatRate: Number(b.VATRate),
+          serviceFeeRate: Number(b.ServiceFeeRate),
+          taxCode: b.TaxCode,
+          isActive: b.IsActive,
+        },
+        newValue: {
+          name: newName,
+          address: newAddress,
+          phone: newPhone,
+          bussinessStartHour: String(newStartHour),
+          vatRate: Number(newVat),
+          serviceFeeRate: Number(newServiceFee),
+          taxCode: newTaxCode,
+          isActive: newIsActive,
+        },
+      });
 
       res.status(200).json({ success: true, message: 'Cập nhật thông tin chi nhánh thành công.' });
     } catch (err) { next(err); }

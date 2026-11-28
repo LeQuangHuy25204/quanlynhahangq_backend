@@ -6,6 +6,31 @@ SET CHARACTER SET utf8mb4;
 /*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
 /*!40101 SET NAMES utf8mb4 */;
 
+CREATE TABLE `activitylog` (
+  `LogID` bigint(20) NOT NULL AUTO_INCREMENT,
+  `RestaurantID` bigint(20) NOT NULL DEFAULT 1,
+  `BranchID` bigint(20) DEFAULT NULL COMMENT 'NULL nếu thao tác toàn chuỗi hoặc cấp hệ thống',
+  `StaffID` bigint(20) DEFAULT NULL COMMENT 'FK tới staff nếu actor là nhân viên/quản lý; NULL nếu Guest/System',
+  `ActorType` varchar(30) NOT NULL COMMENT 'RestaurantAdmin | BranchManager | Cashier | Waiter | Guest | System',
+  `ActorName` varchar(255) NOT NULL COMMENT 'Tên hiển thị của actor thực hiện thao tác',
+  `EntityType` varchar(50) NOT NULL COMMENT 'Tên bảng/đối tượng bị tác động',
+  `EntityID` bigint(20) DEFAULT NULL COMMENT 'ID bản ghi bị tác động',
+  `Action` varchar(100) NOT NULL COMMENT 'Mã hành động chuẩn hóa',
+  `Severity` varchar(20) NOT NULL DEFAULT 'INFO' COMMENT 'Mức độ: INFO | WARNING | CRITICAL',
+  `Description` varchar(500) NOT NULL COMMENT 'Mô tả chi tiết bằng tiếng Việt',
+  `OldValue` json DEFAULT NULL COMMENT 'Dữ liệu gốc trước khi bị thay đổi',
+  `NewValue` json DEFAULT NULL COMMENT 'Dữ liệu mới sau khi đã thay đổi',
+  `IPAddress` varchar(45) DEFAULT NULL COMMENT 'Địa chỉ IP phát sinh thao tác',
+  `Timestamp` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`LogID`),
+  KEY `idx_activitylog_restaurant_time` (`RestaurantID`, `Timestamp`),
+  KEY `idx_activitylog_branch_time` (`BranchID`, `Timestamp`),
+  KEY `idx_activitylog_actor` (`ActorType`, `Timestamp`),
+  KEY `idx_activitylog_staff` (`StaffID`, `Timestamp`),
+  KEY `idx_activitylog_entity` (`EntityType`, `EntityID`),
+  KEY `idx_activitylog_action_severity` (`Action`, `Severity`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 CREATE TABLE `area` (
   `AreaID` bigint(20) NOT NULL AUTO_INCREMENT,
   `BranchID` bigint(20) NOT NULL,
@@ -228,7 +253,8 @@ CREATE TABLE `session` (
   PRIMARY KEY (`SessionID`),
   UNIQUE KEY `UQ_Session_SessionToken` (`SessionToken`),
   UNIQUE KEY `UQ_Session_JoinCode` (`JoinCode`),
-  KEY `FK_Session_Table` (`TableID`)
+  KEY `FK_Session_Table` (`TableID`),
+  KEY `idx_session_status_created` (`Status`, `CreatedAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE `sessionparticipant` (
@@ -272,6 +298,10 @@ CREATE TABLE `table` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 
+ALTER TABLE `activitylog`
+  ADD CONSTRAINT `FK_ActivityLog_Restaurant` FOREIGN KEY (`RestaurantID`) REFERENCES `restaurant` (`RestaurantID`) ON DELETE CASCADE,
+  ADD CONSTRAINT `FK_ActivityLog_Branch` FOREIGN KEY (`BranchID`) REFERENCES `branch` (`BranchID`) ON DELETE SET NULL,
+  ADD CONSTRAINT `FK_ActivityLog_Staff` FOREIGN KEY (`StaffID`) REFERENCES `staff` (`StaffID`) ON DELETE SET NULL;
 ALTER TABLE `area`
   ADD CONSTRAINT `FK_Area_Branch` FOREIGN KEY (`BranchID`) REFERENCES `branch` (`BranchID`);
 ALTER TABLE `branch`

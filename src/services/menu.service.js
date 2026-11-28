@@ -1,6 +1,8 @@
 'use strict';
 
 const menuModel = require('../models/menu.model');
+const activityLogService = require('./activityLog.service');
+const { LOG_SEVERITY } = require('../constants/status');
 
 /**
  * Lấy danh sách menu, nhóm theo Category.
@@ -106,6 +108,23 @@ const addMenuItem = async (data, actorUser) => {
     isWeightBased: !!isWeightBased,
   });
 
+  await activityLogService.logStaffAction(actorUser, {
+    branchId,
+    entityType: 'MenuItem',
+    entityId: insertId,
+    action: 'MENU_ITEM_CREATE',
+    severity: LOG_SEVERITY.WARNING,
+    description: `Thêm món mới "${name}" (giá gốc ${parseFloat(basePrice).toLocaleString('vi-VN')}đ)${branchId ? ` cho chi nhánh #${branchId}` : ' (toàn chuỗi)'}.`,
+    newValue: {
+      menuItemId: insertId,
+      branchId,
+      categoryId,
+      name,
+      basePrice: parseFloat(basePrice),
+      isWeightBased: !!isWeightBased,
+    },
+  });
+
   return { menuItemId: insertId, branchId };
 };
 
@@ -157,16 +176,46 @@ const setBranchOverride = async (menuItemId, data, actorUser) => {
     throw err;
   }
 
+  const parsedMenuItemId = parseInt(menuItemId, 10);
+  const [prevOverride, menuItemRow] = await Promise.all([
+    menuModel.findBranchOverride(targetBranchId, parsedMenuItemId),
+    menuModel.findMenuItemById(parsedMenuItemId),
+  ]);
+
+  const nextAvailable = isAvailable !== undefined ? !!isAvailable : true;
+  const nextOverridePrice = overridePrice != null ? parseFloat(overridePrice) : null;
+
   await menuModel.upsertBranchOverride({
     branchId:          targetBranchId,
-    menuItemId:        parseInt(menuItemId, 10),
-    overridePrice:     overridePrice != null ? parseFloat(overridePrice) : null,
-    isAvailable:       isAvailable !== undefined ? !!isAvailable : true,
+    menuItemId:        parsedMenuItemId,
+    overridePrice:     nextOverridePrice,
+    isAvailable:       nextAvailable,
     stockQuantity:     parsedStock,
     lowStockThreshold: parsedThreshold,
   });
 
-  return { menuItemId: parseInt(menuItemId, 10), branchId: targetBranchId };
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: targetBranchId,
+    entityType: 'BranchMenuOverride',
+    entityId: parsedMenuItemId,
+    action: 'MENU_OVERRIDE_UPDATE',
+    severity: LOG_SEVERITY.WARNING,
+    description: `Cập nhật cấu hình/tồn kho món "${menuItemRow?.Name || `#${parsedMenuItemId}`}" tại chi nhánh #${targetBranchId}.`,
+    oldValue: prevOverride ? {
+      overridePrice: prevOverride.OverridePrice != null ? parseFloat(prevOverride.OverridePrice) : null,
+      isAvailable: prevOverride.IsAvailable === 1,
+      stockQuantity: prevOverride.StockQuantity != null ? parseFloat(prevOverride.StockQuantity) : null,
+      lowStockThreshold: prevOverride.LowStockThreshold != null ? parseFloat(prevOverride.LowStockThreshold) : 5,
+    } : null,
+    newValue: {
+      overridePrice: nextOverridePrice,
+      isAvailable: (parsedStock !== null && parsedStock <= 0) ? false : nextAvailable,
+      stockQuantity: parsedStock,
+      lowStockThreshold: parsedThreshold,
+    },
+  });
+
+  return { menuItemId: parsedMenuItemId, branchId: targetBranchId };
 };
 
 /**
@@ -226,6 +275,15 @@ const createCategory = async ({ name, description }, actorUser) => {
     name: String(name).trim(),
     description,
   });
+  await activityLogService.logStaffAction(actorUser, {
+    branchId: null,
+    entityType: 'Category',
+    entityId: categoryId,
+    action: 'CATEGORY_CREATE',
+    severity: LOG_SEVERITY.INFO,
+    description: `Tạo danh mục món ăn mới "${String(name).trim()}".`,
+    newValue: { categoryId, name: String(name).trim(), description: description || null },
+  });
   return { categoryId, name: String(name).trim() };
 };
 
@@ -266,16 +324,48 @@ const updateMenuItem = async (menuItemId, data, actorUser) => {
     branchId = data.branchId ? parseInt(data.branchId, 10) : null;
   }
 
+  const nextDesc = data.description !== undefined ? data.description : item.Description;
+  const nextUrl = data.urlImage !== undefined ? data.urlImage : item.url_Image;
+  const nextWeightBased = data.isWeightBased !== undefined ? !!data.isWeightBased : item.IsWeightBased === 1;
+  const nextActive = data.isActive !== undefined ? !!data.isActive : item.IsActive === 1;
+
   await menuModel.updateMenuItem(menuItemId, {
     categoryId,
     name,
-    description:   data.description !== undefined ? data.description : item.Description,
+    description:   nextDesc,
     basePrice,
-    urlImage:      data.urlImage !== undefined ? data.urlImage : item.url_Image,
-    isWeightBased: data.isWeightBased !== undefined ? !!data.isWeightBased : item.IsWeightBased === 1,
-    isActive:      data.isActive !== undefined ? !!data.isActive : item.IsActive === 1,
+    urlImage:      nextUrl,
+    isWeightBased: nextWeightBased,
+    isActive:      nextActive,
     branchId,
   });
+
+  const criticalChanged = basePrice !== parseFloat(item.BasePrice) || nextActive !== (item.IsActive === 1);
+  await activityLogService.logStaffAction(actorUser, {
+    branchId,
+    entityType: 'MenuItem',
+    entityId: parseInt(menuItemId, 10),
+    action: 'MENU_ITEM_UPDATE',
+    severity: criticalChanged ? LOG_SEVERITY.CRITICAL : LOG_SEVERITY.WARNING,
+    description: `Cập nhật món "${name}" (#${menuItemId}).`,
+    oldValue: {
+      name: item.Name,
+      categoryId: item.CategoryID,
+      basePrice: parseFloat(item.BasePrice),
+      isWeightBased: item.IsWeightBased === 1,
+      isActive: item.IsActive === 1,
+      branchId: item.BranchID,
+    },
+    newValue: {
+      name,
+      categoryId,
+      basePrice,
+      isWeightBased: nextWeightBased,
+      isActive: nextActive,
+      branchId,
+    },
+  });
+
   return { menuItemId: parseInt(menuItemId, 10), branchId };
 };
 

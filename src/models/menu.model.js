@@ -283,6 +283,17 @@ const findMenuItemById = async (menuItemId) => {
   return rows[0] || null;
 };
 
+const findBranchOverride = async (branchId, menuItemId) => {
+  const [rows] = await pool.execute(
+    `SELECT BranchMenuOverrideID, BranchID, MenuItemID, OverridePrice, IsAvailable, StockQuantity, LowStockThreshold
+     FROM branchmenuoverride
+     WHERE BranchID = ? AND MenuItemID = ?
+     LIMIT 1`,
+    [branchId, menuItemId]
+  );
+  return rows[0] || null;
+};
+
 const updateMenuItem = async (menuItemId, { categoryId, name, description, basePrice, urlImage, isWeightBased, isActive, branchId }) => {
   let query = `UPDATE menuitem SET CategoryID = ?, Name = ?, Description = ?, BasePrice = ?, url_Image = ?, IsWeightBased = ?, IsActive = ?`;
   const params = [categoryId, name, description || null, basePrice, urlImage || null, isWeightBased ? 1 : 0, isActive ? 1 : 0];
@@ -308,5 +319,6 @@ module.exports = {
   findCategoryById,
   createCategory,
   findMenuItemById,
+  findBranchOverride,
   updateMenuItem,
 };
